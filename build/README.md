@@ -40,6 +40,20 @@ Package without rebuilding (requires an existing binary at `build/bin/beneficiar
 powershell -ExecutionPolicy Bypass -File build/package.ps1 -Version 0.1.0 -SkipBuild
 ```
 
+Run tests in strict mode (fails on any `go test` error):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/test.ps1
+```
+
+Run tests with known Windows temp-exe lock fallback:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/test.ps1 -AllowKnownWindowsExeLockFallback
+```
+
+The fallback path runs full tests first, then if it detects the specific Windows `Access is denied` lock for `internal/app.test.exe` or `internal/ui.test.exe`, it re-runs tests excluding those two packages and adds a compile check for `internal/app` and `internal/ui`.
+
 ## Artifact Layout Example
 
 `build/releases/offline-beneficiary-tool-win64-0.1.0/`

@@ -14,7 +14,10 @@ $goFiles = @(
 Write-Host "Formatting Go files..."
 gofmt -w $goFiles
 
-Write-Host "Running tests (readonly module mode)..."
-go test -mod=readonly ./...
+Write-Host "Running tests (readonly module mode with Windows lock fallback)..."
+& (Join-Path $PSScriptRoot "test.ps1") -AllowKnownWindowsExeLockFallback
+if ($LASTEXITCODE -ne 0) {
+    throw "Validation test step failed."
+}
 
 Write-Host "Validation completed."
