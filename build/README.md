@@ -12,7 +12,8 @@ Also supports isolated Go temp/cache paths via `-GoCache` and `-TempRoot`.
 Copies the PSGC CSV file next to the built executable so the app can start
 from the build output directory.
 Copies the import template CSV next to the built executable so operators have
-a bundled example import file.
+a bundled example import file that matches the public CSV layout:
+`id,last_name,first_name,middle_name,extension_name,region,province,city_municipality,barangay,contact_no,month_mm,day_dd,year_yyyy,sex`.
 
 2. `build/package.ps1`
 Builds (unless `-SkipBuild` is used), then assembles a portable release folder under `build/releases/`.

@@ -32,8 +32,8 @@ func TestImporterPreviewCommitResumeCSV(t *testing.T) {
 
 	seedImporterPSGC(t, handle.DB)
 	csvPath := writeBeneficiaryCSVFixture(t, []beneficiaryCSVRow{
-		{GeneratedID: "G-000001", LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "", Sex: "F", BirthdateISO: "1980-01-02", RegionCode: "01", ProvinceCode: "0101", CityCode: "010101", BarangayCode: "010101001", ContactNo: "09170000001"},
-		{GeneratedID: "G-000002", LastName: "Santos", FirstName: "Ben", MiddleName: "T", ExtensionName: "", Sex: "M", BirthdateISO: "1979-03-04", RegionCode: "01", ProvinceCode: "0101", CityCode: "010101", BarangayCode: "010101001", ContactNo: "09170000002"},
+		{ID: "", LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "", Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One", ContactNo: "09170000001", MonthMM: "01", DayDD: "02", YearYYYY: "1980", Sex: "F"},
+		{ID: "G-000002", LastName: "Santos", FirstName: "Ben", MiddleName: "T", ExtensionName: "", Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One", ContactNo: "09170000002", MonthMM: "03", DayDD: "04", YearYYYY: "1979", Sex: "M"},
 	})
 
 	preview, err := imp.Preview(ctx, Source{
@@ -118,7 +118,7 @@ func TestImporterPreviewAndCommitExchangePackage(t *testing.T) {
 
 	seedImporterPSGC(t, handle.DB)
 	packagePath := writeExchangePackageFixture(t, []beneficiaryCSVRow{
-		{GeneratedID: "G-000101", LastName: "Dela Cruz", FirstName: "Carla", MiddleName: "B", ExtensionName: "", Sex: "F", BirthdateISO: "1985-05-06", RegionCode: "01", ProvinceCode: "0101", CityCode: "010101", BarangayCode: "010101001", ContactNo: "09179990001"},
+		{ID: "G-000101", LastName: "Dela Cruz", FirstName: "Carla", MiddleName: "B", ExtensionName: "", Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One", ContactNo: "09179990001", MonthMM: "05", DayDD: "06", YearYYYY: "1985", Sex: "F"},
 	})
 
 	preview, err := imp.Preview(ctx, Source{
@@ -199,18 +199,20 @@ func newImporterTestFixture(t *testing.T, opts ...Option) (*Importer, *repositor
 }
 
 type beneficiaryCSVRow struct {
-	GeneratedID   string
-	LastName      string
-	FirstName     string
-	MiddleName    string
-	ExtensionName string
-	Sex           string
-	BirthdateISO  string
-	RegionCode    string
-	ProvinceCode  string
-	CityCode      string
-	BarangayCode  string
-	ContactNo     string
+	ID               string
+	LastName         string
+	FirstName        string
+	MiddleName       string
+	ExtensionName    string
+	Region           string
+	Province         string
+	CityMunicipality string
+	Barangay         string
+	ContactNo        string
+	MonthMM          string
+	DayDD            string
+	YearYYYY         string
+	Sex              string
 }
 
 func seedImporterPSGC(t *testing.T, database *sql.DB) {
@@ -235,23 +237,25 @@ func writeBeneficiaryCSVFixture(t *testing.T, rows []beneficiaryCSVRow) string {
 
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
-	if err := writer.Write(requiredBeneficiaryHeaders); err != nil {
+	if err := writer.Write(publicBeneficiaryHeaders); err != nil {
 		t.Fatalf("write header: %v", err)
 	}
 	for _, row := range rows {
 		if err := writer.Write([]string{
-			row.GeneratedID,
+			row.ID,
 			row.LastName,
 			row.FirstName,
 			row.MiddleName,
 			row.ExtensionName,
-			row.Sex,
-			row.BirthdateISO,
-			row.RegionCode,
-			row.ProvinceCode,
-			row.CityCode,
-			row.BarangayCode,
+			row.Region,
+			row.Province,
+			row.CityMunicipality,
+			row.Barangay,
 			row.ContactNo,
+			row.MonthMM,
+			row.DayDD,
+			row.YearYYYY,
+			row.Sex,
 		}); err != nil {
 			t.Fatalf("write csv row: %v", err)
 		}
@@ -327,23 +331,25 @@ func buildBeneficiaryCSVBytes(t *testing.T, rows []beneficiaryCSVRow) []byte {
 
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
-	if err := writer.Write(requiredBeneficiaryHeaders); err != nil {
+	if err := writer.Write(publicBeneficiaryHeaders); err != nil {
 		t.Fatalf("write header: %v", err)
 	}
 	for _, row := range rows {
 		if err := writer.Write([]string{
-			row.GeneratedID,
+			row.ID,
 			row.LastName,
 			row.FirstName,
 			row.MiddleName,
 			row.ExtensionName,
-			row.Sex,
-			row.BirthdateISO,
-			row.RegionCode,
-			row.ProvinceCode,
-			row.CityCode,
-			row.BarangayCode,
+			row.Region,
+			row.Province,
+			row.CityMunicipality,
+			row.Barangay,
 			row.ContactNo,
+			row.MonthMM,
+			row.DayDD,
+			row.YearYYYY,
+			row.Sex,
 		}); err != nil {
 			t.Fatalf("write csv row: %v", err)
 		}

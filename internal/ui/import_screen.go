@@ -38,7 +38,7 @@ func buildImportScreen(runtime *Runtime) fyne.CanvasObject {
 	sourceType.SetSelected(string(model.ImportSourceCSV))
 
 	sourcePath := widget.NewEntry()
-	sourcePath.SetPlaceHolder(`e.g. D:\Imports\beneficiaries.csv or exchange.zip`)
+	sourcePath.SetPlaceHolder(`Use beneficiary_import_template.csv or exchange.zip`)
 
 	operatorName := widget.NewEntry()
 	operatorName.SetPlaceHolder("Enter operator name")
@@ -58,7 +58,7 @@ func buildImportScreen(runtime *Runtime) fyne.CanvasObject {
 	checkpointToken.Wrapping = fyne.TextWrapWord
 
 	resultView := widget.NewMultiLineEntry()
-	resultView.SetPlaceHolder("Import results and validation details will appear here")
+	resultView.SetPlaceHolder("Import results and validation details will appear here. The bundled CSV template uses the matching workflow layout.")
 	resultView.Wrapping = fyne.TextWrapWord
 	resultView.Disable()
 

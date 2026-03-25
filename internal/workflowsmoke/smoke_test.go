@@ -148,8 +148,6 @@ func TestWorkflowSmoke(t *testing.T) {
 		FirstName:     "Ana",
 		MiddleName:    "S",
 		ExtensionName: "",
-		Sex:           "F",
-		BirthdateISO:  "1980-01-02",
 		RegionCode:    location.RegionCode,
 		RegionName:    location.RegionName,
 		ProvinceCode:  location.ProvinceCode,
@@ -162,6 +160,7 @@ func TestWorkflowSmoke(t *testing.T) {
 		BirthMonth:    int64Ptr(1),
 		BirthDay:      int64Ptr(2),
 		BirthYear:     int64Ptr(1980),
+		Sex:           "F",
 	}
 
 	beforePrompt, err := beneficiarySvc.BuildDuplicatePrecheckPrompt(ctx, draft.toServiceDraft(), "")
@@ -265,32 +264,36 @@ func TestWorkflowSmoke(t *testing.T) {
 	csvPath := filepath.Join(tempDir, "workflow-smoke-import.csv")
 	if err := writeBeneficiaryCSV(csvPath, []smokeCSVRow{
 		{
-			GeneratedID:   "SMOKE-CSV-0001",
-			LastName:      "Santos",
-			FirstName:     "Ben",
-			MiddleName:    "T",
-			ExtensionName: "",
-			Sex:           "M",
-			BirthdateISO:  "1982-03-04",
-			RegionCode:    location.RegionCode,
-			ProvinceCode:  location.ProvinceCode,
-			CityCode:      location.CityCode,
-			BarangayCode:  location.BarangayCode,
-			ContactNo:     "09170000002",
+			ID:               "SMOKE-CSV-0001",
+			LastName:         "Santos",
+			FirstName:        "Ben",
+			MiddleName:       "T",
+			ExtensionName:    "",
+			Region:           location.RegionName,
+			Province:         location.ProvinceName,
+			CityMunicipality: location.CityName,
+			Barangay:         location.BarangayName,
+			ContactNo:        "09170000002",
+			MonthMM:          "03",
+			DayDD:            "04",
+			YearYYYY:         "1982",
+			Sex:              "M",
 		},
 		{
-			GeneratedID:   "SMOKE-CSV-0002",
-			LastName:      "Dela Cruz",
-			FirstName:     "Carla",
-			MiddleName:    "B",
-			ExtensionName: "",
-			Sex:           "F",
-			BirthdateISO:  "1985-05-06",
-			RegionCode:    location.RegionCode,
-			ProvinceCode:  location.ProvinceCode,
-			CityCode:      location.CityCode,
-			BarangayCode:  location.BarangayCode,
-			ContactNo:     "09179990001",
+			ID:               "SMOKE-CSV-0002",
+			LastName:         "Dela Cruz",
+			FirstName:        "Carla",
+			MiddleName:       "B",
+			ExtensionName:    "",
+			Region:           location.RegionName,
+			Province:         location.ProvinceName,
+			CityMunicipality: location.CityName,
+			Barangay:         location.BarangayName,
+			ContactNo:        "09179990001",
+			MonthMM:          "05",
+			DayDD:            "06",
+			YearYYYY:         "1985",
+			Sex:              "F",
 		},
 	}); err != nil {
 		t.Fatalf("write csv fixture: %v", err)
@@ -341,18 +344,20 @@ func TestWorkflowSmoke(t *testing.T) {
 	pkgPath := filepath.Join(tempDir, "workflow-smoke-package.zip")
 	if err := writeExchangePackage(pkgPath, []smokeCSVRow{
 		{
-			GeneratedID:   "SMOKE-PKG-0001",
-			LastName:      "Lopez",
-			FirstName:     "Dina",
-			MiddleName:    "C",
-			ExtensionName: "",
-			Sex:           "F",
-			BirthdateISO:  "1987-07-08",
-			RegionCode:    location.RegionCode,
-			ProvinceCode:  location.ProvinceCode,
-			CityCode:      location.CityCode,
-			BarangayCode:  location.BarangayCode,
-			ContactNo:     "09178880001",
+			ID:               "SMOKE-PKG-0001",
+			LastName:         "Lopez",
+			FirstName:        "Dina",
+			MiddleName:       "C",
+			ExtensionName:    "",
+			Region:           location.RegionName,
+			Province:         location.ProvinceName,
+			CityMunicipality: location.CityName,
+			Barangay:         location.BarangayName,
+			ContactNo:        "09178880001",
+			MonthMM:          "07",
+			DayDD:            "08",
+			YearYYYY:         "1987",
+			Sex:              "F",
 		},
 	}); err != nil {
 		t.Fatalf("write package fixture: %v", err)
@@ -478,18 +483,20 @@ type smokeLocation struct {
 }
 
 type smokeCSVRow struct {
-	GeneratedID   string
-	LastName      string
-	FirstName     string
-	MiddleName    string
-	ExtensionName string
-	Sex           string
-	BirthdateISO  string
-	RegionCode    string
-	ProvinceCode  string
-	CityCode      string
-	BarangayCode  string
-	ContactNo     string
+	ID               string
+	LastName         string
+	FirstName        string
+	MiddleName       string
+	ExtensionName    string
+	Region           string
+	Province         string
+	CityMunicipality string
+	Barangay         string
+	ContactNo        string
+	MonthMM          string
+	DayDD            string
+	YearYYYY         string
+	Sex              string
 }
 
 type smokeDraft struct {
@@ -498,7 +505,6 @@ type smokeDraft struct {
 	MiddleName    string
 	ExtensionName string
 	Sex           string
-	BirthdateISO  string
 	RegionCode    string
 	RegionName    string
 	ProvinceCode  string
@@ -531,7 +537,6 @@ func (d smokeDraft) toServiceDraft() service.BeneficiaryDraft {
 		BirthMonth:    d.BirthMonth,
 		BirthDay:      d.BirthDay,
 		BirthYear:     d.BirthYear,
-		BirthdateISO:  d.BirthdateISO,
 		Sex:           d.Sex,
 	}
 }
@@ -614,24 +619,26 @@ func writeBeneficiaryCSV(path string, rows []smokeCSVRow) error {
 
 	writer := csv.NewWriter(file)
 	if err := writer.Write([]string{
-		"generated_id", "last_name", "first_name", "middle_name", "extension_name", "sex", "birthdate_iso", "region_code", "province_code", "city_code", "barangay_code", "contact_no",
+		"id", "last_name", "first_name", "middle_name", "extension_name", "region", "province", "city_municipality", "barangay", "contact_no", "month_mm", "day_dd", "year_yyyy", "sex",
 	}); err != nil {
 		return fmt.Errorf("write csv header: %w", err)
 	}
 	for _, row := range rows {
 		if err := writer.Write([]string{
-			row.GeneratedID,
+			row.ID,
 			row.LastName,
 			row.FirstName,
 			row.MiddleName,
 			row.ExtensionName,
-			row.Sex,
-			row.BirthdateISO,
-			row.RegionCode,
-			row.ProvinceCode,
-			row.CityCode,
-			row.BarangayCode,
+			row.Region,
+			row.Province,
+			row.CityMunicipality,
+			row.Barangay,
 			row.ContactNo,
+			row.MonthMM,
+			row.DayDD,
+			row.YearYYYY,
+			row.Sex,
 		}); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}
@@ -726,24 +733,26 @@ func buildBeneficiaryCSVBytes(rows []smokeCSVRow) ([]byte, error) {
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
 	if err := writer.Write([]string{
-		"generated_id", "last_name", "first_name", "middle_name", "extension_name", "sex", "birthdate_iso", "region_code", "province_code", "city_code", "barangay_code", "contact_no",
+		"id", "last_name", "first_name", "middle_name", "extension_name", "region", "province", "city_municipality", "barangay", "contact_no", "month_mm", "day_dd", "year_yyyy", "sex",
 	}); err != nil {
 		return nil, fmt.Errorf("write csv header: %w", err)
 	}
 	for _, row := range rows {
 		if err := writer.Write([]string{
-			row.GeneratedID,
+			row.ID,
 			row.LastName,
 			row.FirstName,
 			row.MiddleName,
 			row.ExtensionName,
-			row.Sex,
-			row.BirthdateISO,
-			row.RegionCode,
-			row.ProvinceCode,
-			row.CityCode,
-			row.BarangayCode,
+			row.Region,
+			row.Province,
+			row.CityMunicipality,
+			row.Barangay,
 			row.ContactNo,
+			row.MonthMM,
+			row.DayDD,
+			row.YearYYYY,
+			row.Sex,
 		}); err != nil {
 			return nil, fmt.Errorf("write csv row: %w", err)
 		}

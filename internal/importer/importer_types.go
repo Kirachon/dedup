@@ -13,7 +13,24 @@ const (
 	maxSampleErrors = 10
 )
 
-var requiredBeneficiaryHeaders = []string{
+var publicBeneficiaryHeaders = []string{
+	"id",
+	"last_name",
+	"first_name",
+	"middle_name",
+	"extension_name",
+	"region",
+	"province",
+	"city_municipality",
+	"barangay",
+	"contact_no",
+	"month_mm",
+	"day_dd",
+	"year_yyyy",
+	"sex",
+}
+
+var legacyBeneficiaryHeaders = []string{
 	"generated_id",
 	"last_name",
 	"first_name",
@@ -94,4 +111,3 @@ type importRepository interface {
 	repository.LogRepository
 	repository.PSGCRepository
 }
-

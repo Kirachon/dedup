@@ -15,7 +15,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"dedup/internal/model"
@@ -47,6 +49,8 @@ type Importer struct {
 	creator         beneficiaryCreator
 	now             func() time.Time
 	commitRowBudget int
+	catalogMu       sync.Mutex
+	catalog         *psgcCatalog
 }
 
 // ImportToken stores the stable source details used for preview/commit/resume.
@@ -100,6 +104,13 @@ type commitState struct {
 	rowsSkipped     int
 	rowsFailed      int
 	nextRow         int
+}
+
+type psgcCatalog struct {
+	regions           []model.PSGCRegion
+	provincesByRegion map[string][]model.PSGCProvince
+	citiesByProvince  map[string][]model.PSGCCity
+	barangaysByCity   map[string][]model.PSGCBarangay
 }
 
 // New constructs an importer service on top of the repository and beneficiary service surfaces.
@@ -481,7 +492,7 @@ func (i *Importer) scanSource(ctx context.Context, doc sourceDocument, startRow 
 
 		stats.Total++
 
-		_, _, validationErr := i.buildDraftFromRecord(ctx, doc, record, rowIndex)
+		_, _, _, validationErr := i.buildDraftFromRecord(ctx, doc, record, rowIndex)
 		if validationErr != nil {
 			stats.Invalid++
 			if len(sampleErrors) < maxSampleErrors {
@@ -604,7 +615,7 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 		result.RowsRead++
 		log.RowsRead = result.RowsRead
 
-		draft, rowSourceReference, err := i.buildDraftFromRecord(ctx, state.document, record, rowIndex)
+		draft, rowSourceReference, preferredGeneratedID, err := i.buildDraftFromRecord(ctx, state.document, record, rowIndex)
 		if err != nil {
 			result.RowsFailed++
 			log.RowsFailed = result.RowsFailed
@@ -665,7 +676,7 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 
 		created, err := i.creator.CreateBeneficiary(ctx, draft, service.CreateOptions{
 			InternalUUID:         uuid.NewString(),
-			PreferredGeneratedID: strings.TrimSpace(record[0]),
+			PreferredGeneratedID: preferredGeneratedID,
 			SourceType:           model.BeneficiarySourceImport,
 			SourceReference:      rowSourceReference,
 			RecordStatus:         model.RecordStatusActive,
@@ -809,12 +820,88 @@ func (i *Importer) hasSourceReference(ctx context.Context, sourceReference strin
 	return false, nil
 }
 
-func (i *Importer) buildDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, error) {
-	if len(record) != len(requiredBeneficiaryHeaders) {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: expected %d columns, got %d", rowIndex, len(requiredBeneficiaryHeaders), len(record))
+func (i *Importer) buildDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, error) {
+	switch len(record) {
+	case len(publicBeneficiaryHeaders):
+		return i.buildPublicDraftFromRecord(ctx, doc, record, rowIndex)
+	case len(legacyBeneficiaryHeaders):
+		return i.buildLegacyDraftFromRecord(ctx, doc, record, rowIndex)
+	default:
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: expected %d columns for the public template or %d columns for the legacy package layout, got %d", rowIndex, len(publicBeneficiaryHeaders), len(legacyBeneficiaryHeaders), len(record))
+	}
+}
+
+func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, error) {
+	preferredGeneratedID := strings.TrimSpace(record[0])
+	lastName := strings.TrimSpace(record[1])
+	firstName := strings.TrimSpace(record[2])
+	middleName := strings.TrimSpace(record[3])
+	extensionName := strings.TrimSpace(record[4])
+	regionValue := strings.TrimSpace(record[5])
+	provinceValue := strings.TrimSpace(record[6])
+	cityValue := strings.TrimSpace(record[7])
+	barangayValue := strings.TrimSpace(record[8])
+	contactNo := strings.TrimSpace(record[9])
+	birthMonthText := strings.TrimSpace(record[10])
+	birthDayText := strings.TrimSpace(record[11])
+	birthYearText := strings.TrimSpace(record[12])
+	sex := strings.TrimSpace(record[13])
+
+	if regionValue == "" || provinceValue == "" || cityValue == "" || barangayValue == "" {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: region, province, city_municipality, and barangay are required", rowIndex)
 	}
 
-	generatedID := strings.TrimSpace(record[0])
+	catalog, err := i.getPSGCCatalog(ctx)
+	if err != nil {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load PSGC catalog: %w", rowIndex, err)
+	}
+	location, err := catalog.resolvePublicLocation(regionValue, provinceValue, cityValue, barangayValue)
+	if err != nil {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+	}
+	birthMonth, err := parseNullableInt64Field(birthMonthText, "month_mm")
+	if err != nil {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+	}
+	birthDay, err := parseNullableInt64Field(birthDayText, "day_dd")
+	if err != nil {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+	}
+	birthYear, err := parseNullableInt64Field(birthYearText, "year_yyyy")
+	if err != nil {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+	}
+
+	draft := service.BeneficiaryDraft{
+		LastName:      lastName,
+		FirstName:     firstName,
+		MiddleName:    middleName,
+		ExtensionName: extensionName,
+		RegionCode:    location.RegionCode,
+		RegionName:    location.RegionName,
+		ProvinceCode:  location.ProvinceCode,
+		ProvinceName:  location.ProvinceName,
+		CityCode:      location.CityCode,
+		CityName:      location.CityName,
+		BarangayCode:  location.BarangayCode,
+		BarangayName:  location.BarangayName,
+		ContactNo:     contactNo,
+		BirthMonth:    birthMonth,
+		BirthDay:      birthDay,
+		BirthYear:     birthYear,
+		Sex:           sex,
+	}
+
+	if _, err := i.creator.NormalizeAndValidateDraft(draft); err != nil {
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+	}
+
+	rowSourceReference := rowProvenance(doc.SourceReference, rowIndex)
+	return draft, rowSourceReference, preferredGeneratedID, nil
+}
+
+func (i *Importer) buildLegacyDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, error) {
+	preferredGeneratedID := strings.TrimSpace(record[0])
 	lastName := strings.TrimSpace(record[1])
 	firstName := strings.TrimSpace(record[2])
 	middleName := strings.TrimSpace(record[3])
@@ -827,50 +914,47 @@ func (i *Importer) buildDraftFromRecord(ctx context.Context, doc sourceDocument,
 	barangayCode := strings.TrimSpace(record[10])
 	contactNo := strings.TrimSpace(record[11])
 
-	if generatedID == "" {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: generated_id is required", rowIndex)
-	}
 	if regionCode == "" || provinceCode == "" || cityCode == "" || barangayCode == "" {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: location codes are required", rowIndex)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: location codes are required", rowIndex)
 	}
 
 	region, err := i.repo.GetRegion(ctx, regionCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: load region %s: %w", rowIndex, regionCode, err)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load region %s: %w", rowIndex, regionCode, err)
 	}
 	province, err := i.repo.GetProvince(ctx, provinceCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: load province %s: %w", rowIndex, provinceCode, err)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load province %s: %w", rowIndex, provinceCode, err)
 	}
 	city, err := i.repo.GetCity(ctx, cityCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: load city %s: %w", rowIndex, cityCode, err)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load city %s: %w", rowIndex, cityCode, err)
 	}
 	barangay, err := i.repo.GetBarangay(ctx, barangayCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: load barangay %s: %w", rowIndex, barangayCode, err)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load barangay %s: %w", rowIndex, barangayCode, err)
 	}
 
 	if strings.TrimSpace(region.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: region code mismatch", rowIndex)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: region code mismatch", rowIndex)
 	}
 	if strings.TrimSpace(province.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: province %s does not belong to region %s", rowIndex, provinceCode, regionCode)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: province %s does not belong to region %s", rowIndex, provinceCode, regionCode)
 	}
 	if strings.TrimSpace(city.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: city %s does not belong to region %s", rowIndex, cityCode, regionCode)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: city %s does not belong to region %s", rowIndex, cityCode, regionCode)
 	}
 	if city.ProvinceCode != nil && strings.TrimSpace(*city.ProvinceCode) != provinceCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: city %s does not belong to province %s", rowIndex, cityCode, provinceCode)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: city %s does not belong to province %s", rowIndex, cityCode, provinceCode)
 	}
 	if strings.TrimSpace(barangay.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: barangay %s does not belong to region %s", rowIndex, barangayCode, regionCode)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: barangay %s does not belong to region %s", rowIndex, barangayCode, regionCode)
 	}
 	if barangay.ProvinceCode != nil && strings.TrimSpace(*barangay.ProvinceCode) != provinceCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: barangay %s does not belong to province %s", rowIndex, barangayCode, provinceCode)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: barangay %s does not belong to province %s", rowIndex, barangayCode, provinceCode)
 	}
 	if strings.TrimSpace(barangay.CityCode) != cityCode {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: barangay %s does not belong to city %s", rowIndex, barangayCode, cityCode)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: barangay %s does not belong to city %s", rowIndex, barangayCode, cityCode)
 	}
 
 	draft := service.BeneficiaryDraft{
@@ -892,27 +976,269 @@ func (i *Importer) buildDraftFromRecord(ctx context.Context, doc sourceDocument,
 	}
 
 	if _, err := i.creator.NormalizeAndValidateDraft(draft); err != nil {
-		return service.BeneficiaryDraft{}, "", fmt.Errorf("row %d: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
 	}
 
 	rowSourceReference := rowProvenance(doc.SourceReference, rowIndex)
-	return draft, rowSourceReference, nil
+	return draft, rowSourceReference, preferredGeneratedID, nil
 }
 
 func validateImportHeader(header []string) error {
-	if len(header) != len(requiredBeneficiaryHeaders) {
-		return fmt.Errorf("expected %d columns, got %d", len(requiredBeneficiaryHeaders), len(header))
+	if headerMatches(header, publicBeneficiaryHeaders) || headerMatches(header, legacyBeneficiaryHeaders) {
+		return nil
 	}
-	for idx, want := range requiredBeneficiaryHeaders {
+	return fmt.Errorf("expected either public template headers (%d columns) or legacy package headers (%d columns), got %d", len(publicBeneficiaryHeaders), len(legacyBeneficiaryHeaders), len(header))
+}
+
+func headerMatches(header []string, expected []string) bool {
+	if len(header) != len(expected) {
+		return false
+	}
+	for idx, want := range expected {
 		got := strings.TrimSpace(header[idx])
 		if idx == 0 {
 			got = strings.TrimPrefix(got, "\ufeff")
 		}
 		if got != want {
-			return fmt.Errorf("unexpected header at column %d: got %q want %q", idx+1, got, want)
+			return false
 		}
 	}
-	return nil
+	return true
+}
+
+type resolvedPSGCLocation struct {
+	RegionCode   string
+	RegionName   string
+	ProvinceCode string
+	ProvinceName string
+	CityCode     string
+	CityName     string
+	BarangayCode string
+	BarangayName string
+}
+
+func (i *Importer) getPSGCCatalog(ctx context.Context) (*psgcCatalog, error) {
+	i.catalogMu.Lock()
+	catalog := i.catalog
+	i.catalogMu.Unlock()
+	if catalog != nil {
+		return catalog, nil
+	}
+
+	built, err := i.buildPSGCCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	i.catalogMu.Lock()
+	defer i.catalogMu.Unlock()
+	if i.catalog == nil {
+		i.catalog = built
+	}
+	return i.catalog, nil
+}
+
+func (i *Importer) buildPSGCCatalog(ctx context.Context) (*psgcCatalog, error) {
+	regions, err := i.repo.ListRegions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	catalog := &psgcCatalog{
+		regions:           regions,
+		provincesByRegion: make(map[string][]model.PSGCProvince, len(regions)),
+		citiesByProvince:  make(map[string][]model.PSGCCity),
+		barangaysByCity:   make(map[string][]model.PSGCBarangay),
+	}
+
+	for _, region := range regions {
+		provinces, err := i.repo.ListProvincesByRegion(ctx, region.RegionCode)
+		if err != nil {
+			return nil, fmt.Errorf("load provinces for region %s: %w", region.RegionCode, err)
+		}
+		catalog.provincesByRegion[region.RegionCode] = provinces
+
+		for _, province := range provinces {
+			cities, err := i.repo.ListCitiesByProvince(ctx, province.ProvinceCode)
+			if err != nil {
+				return nil, fmt.Errorf("load cities for province %s: %w", province.ProvinceCode, err)
+			}
+			catalog.citiesByProvince[province.ProvinceCode] = cities
+
+			for _, city := range cities {
+				barangays, err := i.repo.ListBarangaysByCity(ctx, city.CityCode)
+				if err != nil {
+					return nil, fmt.Errorf("load barangays for city %s: %w", city.CityCode, err)
+				}
+				catalog.barangaysByCity[city.CityCode] = barangays
+			}
+		}
+	}
+
+	return catalog, nil
+}
+
+func (c *psgcCatalog) resolvePublicLocation(regionValue, provinceValue, cityValue, barangayValue string) (resolvedPSGCLocation, error) {
+	region, err := resolvePSGCRegion(c.regions, regionValue)
+	if err != nil {
+		return resolvedPSGCLocation{}, err
+	}
+	provinces := c.provincesByRegion[region.RegionCode]
+	province, err := resolvePSGCProvince(provinces, provinceValue)
+	if err != nil {
+		return resolvedPSGCLocation{}, err
+	}
+	cities := c.citiesByProvince[province.ProvinceCode]
+	city, err := resolvePSGCCity(cities, cityValue)
+	if err != nil {
+		return resolvedPSGCLocation{}, err
+	}
+	barangays := c.barangaysByCity[city.CityCode]
+	barangay, err := resolvePSGCBarangay(barangays, barangayValue)
+	if err != nil {
+		return resolvedPSGCLocation{}, err
+	}
+
+	if strings.TrimSpace(province.RegionCode) != region.RegionCode {
+		return resolvedPSGCLocation{}, fmt.Errorf("province %q does not belong to region %q", provinceValue, regionValue)
+	}
+	if city.RegionCode != region.RegionCode {
+		return resolvedPSGCLocation{}, fmt.Errorf("city %q does not belong to region %q", cityValue, regionValue)
+	}
+	if city.ProvinceCode != nil && strings.TrimSpace(*city.ProvinceCode) != province.ProvinceCode {
+		return resolvedPSGCLocation{}, fmt.Errorf("city %q does not belong to province %q", cityValue, provinceValue)
+	}
+	if barangay.RegionCode != region.RegionCode {
+		return resolvedPSGCLocation{}, fmt.Errorf("barangay %q does not belong to region %q", barangayValue, regionValue)
+	}
+	if barangay.ProvinceCode != nil && strings.TrimSpace(*barangay.ProvinceCode) != province.ProvinceCode {
+		return resolvedPSGCLocation{}, fmt.Errorf("barangay %q does not belong to province %q", barangayValue, provinceValue)
+	}
+	if barangay.CityCode != city.CityCode {
+		return resolvedPSGCLocation{}, fmt.Errorf("barangay %q does not belong to city %q", barangayValue, cityValue)
+	}
+
+	return resolvedPSGCLocation{
+		RegionCode:   region.RegionCode,
+		RegionName:   region.RegionName,
+		ProvinceCode: province.ProvinceCode,
+		ProvinceName: province.ProvinceName,
+		CityCode:     city.CityCode,
+		CityName:     city.CityName,
+		BarangayCode: barangay.BarangayCode,
+		BarangayName: barangay.BarangayName,
+	}, nil
+}
+
+func resolvePSGCRegion(items []model.PSGCRegion, raw string) (model.PSGCRegion, error) {
+	matches := make([]model.PSGCRegion, 0, 1)
+	for _, item := range items {
+		if matchPSGCValue(item.RegionCode, item.RegionName, raw) {
+			matches = append(matches, item)
+		}
+	}
+	return selectSinglePSGCRegion(matches, "region", raw)
+}
+
+func resolvePSGCProvince(items []model.PSGCProvince, raw string) (model.PSGCProvince, error) {
+	matches := make([]model.PSGCProvince, 0, 1)
+	for _, item := range items {
+		if matchPSGCValue(item.ProvinceCode, item.ProvinceName, raw) {
+			matches = append(matches, item)
+		}
+	}
+	return selectSinglePSGCProvince(matches, "province", raw)
+}
+
+func resolvePSGCCity(items []model.PSGCCity, raw string) (model.PSGCCity, error) {
+	matches := make([]model.PSGCCity, 0, 1)
+	for _, item := range items {
+		if matchPSGCValue(item.CityCode, item.CityName, raw) {
+			matches = append(matches, item)
+		}
+	}
+	return selectSinglePSGCCity(matches, "city", raw)
+}
+
+func resolvePSGCBarangay(items []model.PSGCBarangay, raw string) (model.PSGCBarangay, error) {
+	matches := make([]model.PSGCBarangay, 0, 1)
+	for _, item := range items {
+		if matchPSGCValue(item.BarangayCode, item.BarangayName, raw) {
+			matches = append(matches, item)
+		}
+	}
+	return selectSinglePSGCBarangay(matches, "barangay", raw)
+}
+
+func selectSinglePSGCRegion(items []model.PSGCRegion, label, raw string) (model.PSGCRegion, error) {
+	switch len(items) {
+	case 0:
+		return model.PSGCRegion{}, fmt.Errorf("no %s found for %q", label, raw)
+	case 1:
+		return items[0], nil
+	default:
+		return model.PSGCRegion{}, fmt.Errorf("ambiguous %s value %q", label, raw)
+	}
+}
+
+func selectSinglePSGCProvince(items []model.PSGCProvince, label, raw string) (model.PSGCProvince, error) {
+	switch len(items) {
+	case 0:
+		return model.PSGCProvince{}, fmt.Errorf("no %s found for %q", label, raw)
+	case 1:
+		return items[0], nil
+	default:
+		return model.PSGCProvince{}, fmt.Errorf("ambiguous %s value %q", label, raw)
+	}
+}
+
+func selectSinglePSGCCity(items []model.PSGCCity, label, raw string) (model.PSGCCity, error) {
+	switch len(items) {
+	case 0:
+		return model.PSGCCity{}, fmt.Errorf("no %s found for %q", label, raw)
+	case 1:
+		return items[0], nil
+	default:
+		return model.PSGCCity{}, fmt.Errorf("ambiguous %s value %q", label, raw)
+	}
+}
+
+func selectSinglePSGCBarangay(items []model.PSGCBarangay, label, raw string) (model.PSGCBarangay, error) {
+	switch len(items) {
+	case 0:
+		return model.PSGCBarangay{}, fmt.Errorf("no %s found for %q", label, raw)
+	case 1:
+		return items[0], nil
+	default:
+		return model.PSGCBarangay{}, fmt.Errorf("ambiguous %s value %q", label, raw)
+	}
+}
+
+func matchPSGCValue(code, name, raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	if strings.TrimSpace(code) == raw {
+		return true
+	}
+	return normalizeLookupString(name) == normalizeLookupString(raw)
+}
+
+func normalizeLookupString(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+}
+
+func parseNullableInt64Field(value, fieldName string) (*int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be numeric", fieldName)
+	}
+	return &parsed, nil
 }
 
 func rowProvenance(base string, rowIndex int) string {

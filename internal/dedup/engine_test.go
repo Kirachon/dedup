@@ -3,6 +3,7 @@ package dedup
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"dedup/internal/model"
 )
@@ -153,6 +154,45 @@ func TestWeightedTotalScore(t *testing.T) {
 	}
 }
 
+func TestEnginePlanMatchingAlgorithms(t *testing.T) {
+	t.Parallel()
+
+	jw := jaroWinklerScore("MARTHA", "MARHTA")
+	lev := nameScore("MARTHA", "MARHTA")
+	if jw <= lev {
+		t.Fatalf("expected jaro-winkler to score higher than levenshtein for transposition pair: jw=%.6f lev=%.6f", jw, lev)
+	}
+	if jw <= 90 {
+		t.Fatalf("expected jaro-winkler transposition pair to remain a strong match, got %.6f", jw)
+	}
+
+	if got := hammingScore("JR", "JR"); got != 100 {
+		t.Fatalf("expected exact extension match to score 100, got %.6f", got)
+	}
+	if got := hammingScore("JR", "SR"); got != 50 {
+		t.Fatalf("expected one-character hamming mismatch to score 50, got %.6f", got)
+	}
+	if got := hammingScore("JR", "JRS"); got != 0 {
+		t.Fatalf("expected different length extension to score 0, got %.6f", got)
+	}
+}
+
+func TestEngineBlockingKeysPlanStyle(t *testing.T) {
+	t.Parallel()
+
+	item := beneficiaryFixture("uuid-a", "SMITH", "JOHN", "M", "", "010101001", "1990-01-01", model.RecordStatusActive)
+	keys := blockingKeys(item)
+	expected := []string{
+		"B|010101001|1990",
+		"C|010101|J",
+		"C|010101|S",
+		"N|SMI|JOH",
+	}
+	if !reflect.DeepEqual(keys, expected) {
+		t.Fatalf("unexpected blocking keys: want %#v got %#v", expected, keys)
+	}
+}
+
 func beneficiaryFixture(uuid, last, first, middle, ext, barangay, birthdate string, status model.RecordStatus) model.Beneficiary {
 	item := model.Beneficiary{
 		InternalUUID:      uuid,
@@ -191,6 +231,14 @@ func beneficiaryFixture(uuid, last, first, middle, ext, barangay, birthdate stri
 	}
 	if birthdate != "" {
 		item.BirthdateISO = stringPtr(birthdate)
+		if parsed, err := time.Parse("2006-01-02", birthdate); err == nil {
+			month := int64(parsed.Month())
+			day := int64(parsed.Day())
+			year := int64(parsed.Year())
+			item.BirthMonth = &month
+			item.BirthDay = &day
+			item.BirthYear = &year
+		}
 	}
 	return item
 }

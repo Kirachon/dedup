@@ -24,6 +24,26 @@ The repository also includes the CSV import template bundled with the app:
 
 - `beneficiary_import_template.csv`
 
+That template uses the operator-facing matching layout:
+
+- `id`
+- `last_name`
+- `first_name`
+- `middle_name`
+- `extension_name`
+- `region`
+- `province`
+- `city_municipality`
+- `barangay`
+- `contact_no`
+- `month_mm`
+- `day_dd`
+- `year_yyyy`
+- `sex`
+
+The `id` field can be left blank on import if you want the system to
+auto-generate one.
+
 ## Beginner Setup
 
 ### 1. Clone the repository
@@ -39,7 +59,8 @@ The app loads PSGC data from `lib_geo_map_2025_202603251312.csv`.
 Keep that file in the repository root when running from source.
 
 Use `beneficiary_import_template.csv` as the starting point for CSV imports.
-The packaged release copies it next to the executable.
+The packaged release copies it next to the executable, and the Encoding screen
+uses the same split birthdate fields (`month_mm`, `day_dd`, `year_yyyy`).
 
 If you move it, set the environment variable `BENEFICIARY_APP_PSGC_CSV`
 to the new path.

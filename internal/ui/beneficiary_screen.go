@@ -37,7 +37,9 @@ type beneficiaryFormValues struct {
 	BarangayCode  string
 	BarangayName  string
 	ContactNo     string
-	BirthdateISO  string
+	BirthMonth    string
+	BirthDay      string
+	BirthYear     string
 	Sex           string
 }
 
@@ -569,8 +571,12 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 	middleNameEntry := widget.NewEntry()
 	extensionNameEntry := widget.NewEntry()
 	contactNoEntry := widget.NewEntry()
-	birthdateEntry := widget.NewEntry()
-	birthdateEntry.SetPlaceHolder("YYYY-MM-DD")
+	birthMonthEntry := widget.NewEntry()
+	birthMonthEntry.SetPlaceHolder("MM")
+	birthDayEntry := widget.NewEntry()
+	birthDayEntry.SetPlaceHolder("DD")
+	birthYearEntry := widget.NewEntry()
+	birthYearEntry.SetPlaceHolder("YYYY")
 	sexEntry := widget.NewEntry()
 	sexEntry.SetPlaceHolder("M or F")
 
@@ -586,7 +592,9 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 			runtime.SetActivity(err.Error())
 		}
 		contactNoEntry.SetText("")
-		birthdateEntry.SetText("")
+		birthMonthEntry.SetText("")
+		birthDayEntry.SetText("")
+		birthYearEntry.SetText("")
 		sexEntry.SetText("")
 		duplicateLabel.SetText("Precheck ready")
 	}
@@ -603,7 +611,7 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 			runtime.SetActivity(err.Error())
 		}
 		contactNoEntry.SetText(derefString(item.ContactNo))
-		birthdateEntry.SetText(derefString(item.BirthdateISO))
+		populateBirthdateFields(birthMonthEntry, birthDayEntry, birthYearEntry, item)
 		sexEntry.SetText(item.Sex)
 		duplicateLabel.SetText(fmt.Sprintf("Selected: %s | %s, %s (%s)", item.GeneratedID, item.LastName, item.FirstName, item.RecordStatus))
 	}
@@ -694,13 +702,20 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 			BarangayCode:  psgcState.BarangayCode,
 			BarangayName:  psgcState.BarangayName,
 			ContactNo:     contactNoEntry.Text,
-			BirthdateISO:  birthdateEntry.Text,
+			BirthMonth:    birthMonthEntry.Text,
+			BirthDay:      birthDayEntry.Text,
+			BirthYear:     birthYearEntry.Text,
 			Sex:           sexEntry.Text,
 		}
 	}
 
 	runPrecheck := func(values beneficiaryFormValues) {
-		draft := toBeneficiaryDraft(values)
+		draft, err := toBeneficiaryDraft(values)
+		if err != nil {
+			runtime.SetStatus("Duplicate precheck input error")
+			runtime.SetActivity(err.Error())
+			return
+		}
 		currentSelectedUUID := strings.TrimSpace(selectedUUID)
 		runtime.RunAsync("Running duplicate precheck", func() error {
 			prompt, err := runtime.BeneficiaryService.BuildDuplicatePrecheckPrompt(context.Background(), draft, currentSelectedUUID)
@@ -715,7 +730,12 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 	}
 
 	saveBeneficiary := func(values beneficiaryFormValues) {
-		draft := toBeneficiaryDraft(values)
+		draft, err := toBeneficiaryDraft(values)
+		if err != nil {
+			runtime.SetStatus("Save input error")
+			runtime.SetActivity(err.Error())
+			return
+		}
 		search := searchEntry.Text
 		currentSelectedUUID := strings.TrimSpace(selectedUUID)
 		runtime.RunAsync("Saving beneficiary", func() error {
@@ -901,9 +921,11 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 
 	contactCard := SectionCard(
 		"Contact & Birthdate",
-		"Useful for duplicate matching and operator follow-up.",
+		"Split birthdate fields keep the CSV template and PSGC matching operator-friendly.",
 		container.NewGridWithColumns(2,
-			labeledField("Birthdate ISO", birthdateEntry),
+			labeledField("Birth Month", birthMonthEntry),
+			labeledField("Birth Day", birthDayEntry),
+			labeledField("Birth Year", birthYearEntry),
 			labeledField("Contact No", contactNoEntry),
 		),
 	)
@@ -942,7 +964,20 @@ func labeledField(label string, input fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewVBox(widget.NewLabel(label), input)
 }
 
-func toBeneficiaryDraft(values beneficiaryFormValues) service.BeneficiaryDraft {
+func toBeneficiaryDraft(values beneficiaryFormValues) (service.BeneficiaryDraft, error) {
+	birthMonth, err := parseOptionalInt64Text(values.BirthMonth, "Birth Month")
+	if err != nil {
+		return service.BeneficiaryDraft{}, err
+	}
+	birthDay, err := parseOptionalInt64Text(values.BirthDay, "Birth Day")
+	if err != nil {
+		return service.BeneficiaryDraft{}, err
+	}
+	birthYear, err := parseOptionalInt64Text(values.BirthYear, "Birth Year")
+	if err != nil {
+		return service.BeneficiaryDraft{}, err
+	}
+
 	return service.BeneficiaryDraft{
 		LastName:      strings.TrimSpace(values.LastName),
 		FirstName:     strings.TrimSpace(values.FirstName),
@@ -957,9 +992,11 @@ func toBeneficiaryDraft(values beneficiaryFormValues) service.BeneficiaryDraft {
 		BarangayCode:  strings.TrimSpace(values.BarangayCode),
 		BarangayName:  strings.TrimSpace(values.BarangayName),
 		ContactNo:     strings.TrimSpace(values.ContactNo),
-		BirthdateISO:  strings.TrimSpace(values.BirthdateISO),
+		BirthMonth:    birthMonth,
+		BirthDay:      birthDay,
+		BirthYear:     birthYear,
 		Sex:           strings.TrimSpace(values.Sex),
-	}
+	}, nil
 }
 
 func summarizeDuplicatePrompt(prompt *service.DuplicatePrecheckPrompt) string {
@@ -980,11 +1017,67 @@ func summarizeDuplicatePrompt(prompt *service.DuplicatePrecheckPrompt) string {
 }
 
 func formatBeneficiaryListItem(item model.Beneficiary) string {
-	birthdate := derefString(item.BirthdateISO)
+	birthdate := formatBeneficiaryBirthdate(item)
 	if birthdate == "" {
 		birthdate = "n/a"
 	}
 	return fmt.Sprintf("%s | %s, %s | %s/%s | %s", strings.TrimSpace(item.GeneratedID), item.LastName, item.FirstName, item.RecordStatus, item.DedupStatus, birthdate)
+}
+
+func populateBirthdateFields(monthEntry, dayEntry, yearEntry *widget.Entry, item model.Beneficiary) {
+	if monthEntry == nil || dayEntry == nil || yearEntry == nil {
+		return
+	}
+
+	if item.BirthMonth != nil && item.BirthDay != nil && item.BirthYear != nil {
+		monthEntry.SetText(fmt.Sprintf("%02d", *item.BirthMonth))
+		dayEntry.SetText(fmt.Sprintf("%02d", *item.BirthDay))
+		yearEntry.SetText(fmt.Sprintf("%04d", *item.BirthYear))
+		return
+	}
+
+	month, day, year, ok := parseBirthdateISO(derefString(item.BirthdateISO))
+	if !ok {
+		monthEntry.SetText("")
+		dayEntry.SetText("")
+		yearEntry.SetText("")
+		return
+	}
+
+	monthEntry.SetText(fmt.Sprintf("%02d", month))
+	dayEntry.SetText(fmt.Sprintf("%02d", day))
+	yearEntry.SetText(fmt.Sprintf("%04d", year))
+}
+
+func formatBeneficiaryBirthdate(item model.Beneficiary) string {
+	if item.BirthMonth != nil && item.BirthDay != nil && item.BirthYear != nil {
+		return fmt.Sprintf("%04d-%02d-%02d", *item.BirthYear, *item.BirthMonth, *item.BirthDay)
+	}
+	return derefString(item.BirthdateISO)
+}
+
+func parseBirthdateISO(value string) (int64, int64, int64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0, 0, false
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return int64(parsed.Month()), int64(parsed.Day()), int64(parsed.Year()), true
+}
+
+func parseOptionalInt64Text(value, label string) (*int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be numeric", label)
+	}
+	return &parsed, nil
 }
 
 func findBeneficiaryIndexByUUID(items []model.Beneficiary, internalUUID string) int {

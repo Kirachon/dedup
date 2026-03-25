@@ -191,6 +191,7 @@ func buildCandidatePairs(items []model.Beneficiary) map[string][2]int {
 func blockingKeys(item model.Beneficiary) []string {
 	last := normalizedName(item.NormLastName, item.LastName)
 	first := normalizedName(item.NormFirstName, item.FirstName)
+	city := strings.TrimSpace(item.CityCode)
 	barangay := strings.TrimSpace(item.BarangayCode)
 	year := birthYearString(item.BirthYear)
 
@@ -202,15 +203,14 @@ func blockingKeys(item model.Beneficiary) []string {
 		set[key] = struct{}{}
 	}
 
-	add("N|" + prefix(last, 4) + "|" + prefix(first, 4))
-	add("L|" + prefix(last, 6))
-
-	if barangay != "" {
-		add("B|" + barangay + "|" + prefix(last, 3))
+	if city != "" {
+		add("C|" + city + "|" + prefix(last, 1))
+		add("C|" + city + "|" + prefix(first, 1))
 	}
-	if year != "" {
-		add("Y|" + year + "|" + prefix(last, 3))
+	if barangay != "" && year != "" {
+		add("B|" + barangay + "|" + year)
 	}
+	add("N|" + prefix(last, 3) + "|" + prefix(first, 3))
 
 	keys := make([]string, 0, len(set))
 	for key := range set {
@@ -229,10 +229,10 @@ func canonicalPair(a, b model.Beneficiary, left, right int) (pairKey string, fir
 
 func scorePair(a, b model.Beneficiary) ScoredPair {
 	pairKey, _, _ := canonicalPair(a, b, 0, 1)
-	firstNameScore := nameScore(normalizedName(a.NormFirstName, a.FirstName), normalizedName(b.NormFirstName, b.FirstName))
+	firstNameScore := jaroWinklerScore(normalizedName(a.NormFirstName, a.FirstName), normalizedName(b.NormFirstName, b.FirstName))
 	middleNameScore := nameScore(normalizedOptionalName(a.NormMiddleName, a.MiddleName), normalizedOptionalName(b.NormMiddleName, b.MiddleName))
 	lastNameScore := nameScore(normalizedName(a.NormLastName, a.LastName), normalizedName(b.NormLastName, b.LastName))
-	extensionNameScore := nameScore(normalizedOptionalName(a.NormExtensionName, a.ExtensionName), normalizedOptionalName(b.NormExtensionName, b.ExtensionName))
+	extensionNameScore := hammingScore(normalizedOptionalName(a.NormExtensionName, a.ExtensionName), normalizedOptionalName(b.NormExtensionName, b.ExtensionName))
 	totalScore := weightedTotalScore(firstNameScore, middleNameScore, lastNameScore, extensionNameScore)
 
 	recordAUUID := a.InternalUUID
@@ -357,6 +357,129 @@ func nameScore(left, right string) float64 {
 		score = 0
 	}
 	return roundFloat(score, 6)
+}
+
+func jaroWinklerScore(left, right string) float64 {
+	if left == "" && right == "" {
+		return 100
+	}
+	if left == "" || right == "" {
+		return 0
+	}
+	if left == right {
+		return 100
+	}
+
+	jaro := jaroSimilarity([]rune(left), []rune(right))
+	prefixLength := commonPrefixLength(left, right, 4)
+	score := jaro + (float64(prefixLength) * 0.1 * (1 - jaro))
+	return roundFloat(score*100, 6)
+}
+
+func hammingScore(left, right string) float64 {
+	if left == "" && right == "" {
+		return 100
+	}
+	if left == "" || right == "" {
+		return 0
+	}
+	if left == right {
+		return 100
+	}
+
+	leftRunes := []rune(left)
+	rightRunes := []rune(right)
+	if len(leftRunes) != len(rightRunes) {
+		return 0
+	}
+
+	mismatches := 0
+	for index := range leftRunes {
+		if leftRunes[index] != rightRunes[index] {
+			mismatches++
+		}
+	}
+	if len(leftRunes) == 0 {
+		return 100
+	}
+	score := 100 * (1 - (float64(mismatches) / float64(len(leftRunes))))
+	if score < 0 {
+		score = 0
+	}
+	return roundFloat(score, 6)
+}
+
+func jaroSimilarity(left, right []rune) float64 {
+	if len(left) == 0 && len(right) == 0 {
+		return 1
+	}
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+
+	matchDistance := maxInt(len(left), len(right))/2 - 1
+	if matchDistance < 0 {
+		matchDistance = 0
+	}
+
+	leftMatches := make([]bool, len(left))
+	rightMatches := make([]bool, len(right))
+	matches := 0
+	for i := 0; i < len(left); i++ {
+		start := maxInt(0, i-matchDistance)
+		end := minInt(len(right)-1, i+matchDistance)
+		for j := start; j <= end; j++ {
+			if rightMatches[j] {
+				continue
+			}
+			if left[i] != right[j] {
+				continue
+			}
+			leftMatches[i] = true
+			rightMatches[j] = true
+			matches++
+			break
+		}
+	}
+	if matches == 0 {
+		return 0
+	}
+
+	transpositions := 0
+	j := 0
+	for i := 0; i < len(left); i++ {
+		if !leftMatches[i] {
+			continue
+		}
+		for j < len(right) && !rightMatches[j] {
+			j++
+		}
+		if j < len(right) && left[i] != right[j] {
+			transpositions++
+		}
+		j++
+	}
+
+	leftLen := float64(len(left))
+	rightLen := float64(len(right))
+	matchCount := float64(matches)
+	transpositionCount := float64(transpositions) / 2
+
+	return ((matchCount / leftLen) + (matchCount / rightLen) + ((matchCount - transpositionCount) / matchCount)) / 3
+}
+
+func commonPrefixLength(left, right string, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	leftRunes := []rune(left)
+	rightRunes := []rune(right)
+	max := minInt(limit, len(leftRunes), len(rightRunes))
+	prefix := 0
+	for prefix < max && leftRunes[prefix] == rightRunes[prefix] {
+		prefix++
+	}
+	return prefix
 }
 
 func levenshteinDistance(left, right []rune) int {
