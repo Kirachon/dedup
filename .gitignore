@@ -24,6 +24,8 @@ coverage.out
 *.log
 *.tmp
 *.temp
+.gocache/
+.tmp/
 
 # OS/editor clutter
 .DS_Store

@@ -5,15 +5,17 @@ import (
 	"fmt"
 
 	"dedup/internal/config"
-	"dedup/internal/psgc"
+	"dedup/internal/dedup"
+	"dedup/internal/exporter"
+	"dedup/internal/importer"
+	"dedup/internal/jobs"
+	appui "dedup/internal/ui"
 
-	fyne "fyne.io/fyne/v2"
-	fyneapp "fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
+	"dedup/internal/repository"
+	"dedup/internal/service"
 )
 
-// Run launches a minimal UI shell and verifies DB bootstrap.
+// Run launches the desktop UI shell after verifying DB bootstrap.
 func Run(ctx context.Context, cfg config.Config) error {
 	bootstrap, err := BootstrapDatabase(ctx, cfg)
 	if err != nil {
@@ -21,36 +23,50 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	defer bootstrap.DB.Close()
 
-	app := fyneapp.NewWithID(cfg.AppID)
-	window := app.NewWindow(cfg.WindowTitle)
-	window.Resize(fyne.NewSize(920, 580))
-
-	window.SetContent(container.NewVBox(
-		widget.NewLabel("Offline Beneficiary Tool"),
-		widget.NewLabel("Wave 1 scaffold is active."),
-		widget.NewLabel(fmt.Sprintf("SQLite bootstrap successful: %s", bootstrap.DBPath)),
-		widget.NewLabel(psgcStatusLabel(bootstrap.PSGCReport)),
-		widget.NewLabel("Frozen interfaces are documented in docs/contracts/*.md."),
-	))
-
-	window.ShowAndRun()
-	return nil
-}
-
-func psgcStatusLabel(report *psgc.Report) string {
-	if report == nil {
-		return "PSGC ingest: not attempted"
+	repo, err := repository.New(bootstrap.DB, bootstrap.Writer)
+	if err != nil {
+		return fmt.Errorf("build repository: %w", err)
 	}
-	if report.RowsRead == 0 {
-		return "PSGC ingest: no rows processed"
+
+	beneficiaryService, err := service.NewBeneficiaryService(bootstrap.DB, bootstrap.Writer, repo)
+	if err != nil {
+		return fmt.Errorf("build beneficiary service: %w", err)
 	}
-	if report.Skipped {
-		return fmt.Sprintf("PSGC ingest: skipped, checksum already current (%s)", report.SourceChecksum)
+	importerSvc, err := importer.New(repo, beneficiaryService)
+	if err != nil {
+		return fmt.Errorf("build importer: %w", err)
 	}
-	return fmt.Sprintf(
-		"PSGC ingest: %d rows read, %d barangays loaded, checksum %s",
-		report.RowsRead,
-		report.BarangaysInserted,
-		report.SourceChecksum,
+	exporterSvc, err := exporter.New(repo)
+	if err != nil {
+		return fmt.Errorf("build exporter: %w", err)
+	}
+	dedupEngine := dedup.NewEngine()
+	dedupDecisionSvc, err := service.NewDedupDecisionService(repo)
+	if err != nil {
+		return fmt.Errorf("build dedup decision service: %w", err)
+	}
+	backupSvc, err := service.NewBackupService(bootstrap.DB, bootstrap.DBPath, bootstrap.Writer)
+	if err != nil {
+		return fmt.Errorf("build backup service: %w", err)
+	}
+	jobManager := jobs.NewManager(bootstrap.DB, bootstrap.Writer)
+
+	deps, err := appui.NewDependencies(
+		cfg,
+		bootstrap.DBPath,
+		bootstrap.PSGCReport,
+		repo,
+		beneficiaryService,
+		importerSvc,
+		exporterSvc,
+		dedupEngine,
+		dedupDecisionSvc,
+		backupSvc,
+		jobManager,
 	)
+	if err != nil {
+		return fmt.Errorf("build ui dependencies: %w", err)
+	}
+
+	return appui.Launch(ctx, deps)
 }
