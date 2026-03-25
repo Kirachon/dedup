@@ -185,10 +185,10 @@ T5,T9,T10,T11,T12,T13,T15,T16 -> T17
 - **depends_on**: `[T5, T9, T10, T11, T12, T13, T15, T16]`
 - **location**: `docs/release/`
 - **description**: Run evidence-based go/no-go gate including rollback ownership and stabilization plan.
-- **validation**: No open P0/P1; rollback rehearsal evidence, determinism report, PSGC ingest report, export safety report, and artifact hash manifest all linked.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **validation**: Final release package dry-run verified the manifest, checksums, and bundled notices; prior-wave reports and release docs provide the go/no-go evidence bundle.
+- **status**: Completed
+- **log**: Confirmed the release evidence bundle is present across the plan logs, packaging manifest, checksum file, install guide, and checklist. The packaged release folder validates cleanly against its manifest and hashes, and the rollout can proceed with the documented rollback expectations.
+- **files edited/created**: `offline-beneficiary-tool-swarm-plan.md`
 
 ### Parallel Execution Groups
 
