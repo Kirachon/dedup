@@ -105,7 +105,8 @@ $manifest = [ordered]@{
     go_version = $goVersion
     files = $manifestFiles
 }
-$manifest | ConvertTo-Json -Depth 10 | Set-Content -Path $manifestPath -Encoding utf8NoBOM
+$manifestJson = $manifest | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText($manifestPath, $manifestJson, (New-Object System.Text.UTF8Encoding($false)))
 
 $hashTargets = Get-ChildItem -File -Path $releaseDir |
     Where-Object { $_.Name -ne "checksums.sha256" } |
