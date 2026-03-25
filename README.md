@@ -99,6 +99,12 @@ Run the repo validation script:
 powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
 ```
 
+Run the full workflow smoke test:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/smoke.ps1
+```
+
 If Windows endpoint protection locks temporary test executables, use the
 known-lock fallback:
 

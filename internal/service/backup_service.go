@@ -149,6 +149,16 @@ type BackupService struct {
 	reopen func(context.Context, string) (*sql.DB, error)
 }
 
+// Close releases the live database handle managed by the backup service.
+func (s *BackupService) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	err := s.db.Close()
+	s.db = nil
+	return err
+}
+
 // WithBackupClock overrides the service clock for deterministic tests.
 func WithBackupClock(clock func() time.Time) BackupOption {
 	return func(s *BackupService) {

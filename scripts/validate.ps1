@@ -8,7 +8,10 @@ $goFiles = @(
     "cmd/beneficiary-app/main.go",
     "internal/app/bootstrap.go",
     "internal/app/run.go",
-    "internal/config/config.go"
+    "internal/config/config.go",
+    "internal/service/backup_service.go",
+    "internal/ui/app.go",
+    "internal/workflowsmoke/smoke_test.go"
 )
 
 Write-Host "Formatting Go files..."

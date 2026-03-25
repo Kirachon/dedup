@@ -39,13 +39,14 @@ func Launch(ctx context.Context, deps *Dependencies) error {
 	runtime.SetStatus("Ready")
 	runtime.SetActivity("Bootstrap completed")
 
-	content := buildShell(runtime)
+	content := BuildShell(runtime)
 	window.SetContent(content)
 	window.ShowAndRun()
 	return nil
 }
 
-func buildShell(runtime *Runtime) fyne.CanvasObject {
+// BuildShell constructs the full desktop shell from the registered screen set.
+func BuildShell(runtime *Runtime) fyne.CanvasObject {
 	registry := snapshotScreenRegistry()
 	if len(registry) == 0 {
 		return widget.NewLabel("No application screens are available")
