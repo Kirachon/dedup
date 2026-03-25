@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path"
+	"strings"
 
 	"dedup/internal/model"
 )
@@ -184,7 +186,7 @@ INSERT INTO import_logs (
     operator_name,
     remarks
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, log.ImportID, log.SourceType, log.SourceReference, stringValue(log.FileName), stringValue(log.FileHash), stringValue(log.IdempotencyKey), log.RowsRead, log.RowsInserted, log.RowsSkipped, log.RowsFailed, log.Status, log.StartedAt, stringValue(log.CompletedAt), stringValue(log.CheckpointToken), stringValue(log.OperatorName), stringValue(log.Remarks))
+`, log.ImportID, log.SourceType, normalizeImportReference(log.SourceReference), normalizeImportFileName(log.FileName), normalizeOptionalLogText(log.FileHash), normalizeOptionalLogText(log.IdempotencyKey), log.RowsRead, log.RowsInserted, log.RowsSkipped, log.RowsFailed, log.Status, log.StartedAt, normalizeOptionalLogText(log.CompletedAt), normalizeOptionalLogText(log.CheckpointToken), normalizeOptionalLogText(log.OperatorName), normalizeOptionalLogText(log.Remarks))
 	if err != nil {
 		return fmt.Errorf("insert import log: %w", err)
 	}
@@ -217,7 +219,7 @@ UPDATE import_logs SET
     operator_name = ?,
     remarks = ?
 WHERE import_id = ?;
-`, stringValue(log.FileName), stringValue(log.FileHash), stringValue(log.IdempotencyKey), log.RowsRead, log.RowsInserted, log.RowsSkipped, log.RowsFailed, log.Status, stringValue(log.CompletedAt), stringValue(log.CheckpointToken), stringValue(log.OperatorName), stringValue(log.Remarks), log.ImportID)
+`, normalizeImportFileName(log.FileName), normalizeOptionalLogText(log.FileHash), normalizeOptionalLogText(log.IdempotencyKey), log.RowsRead, log.RowsInserted, log.RowsSkipped, log.RowsFailed, log.Status, normalizeOptionalLogText(log.CompletedAt), normalizeOptionalLogText(log.CheckpointToken), normalizeOptionalLogText(log.OperatorName), normalizeOptionalLogText(log.Remarks), log.ImportID)
 	if err != nil {
 		return fmt.Errorf("update import log: %w", err)
 	}
@@ -252,7 +254,7 @@ INSERT INTO export_logs (
     created_at,
     performed_by
 ) VALUES (?, ?, ?, ?, ?, ?);
-`, log.ExportID, log.FileName, log.ExportType, log.RowsExported, log.CreatedAt, stringValue(log.PerformedBy))
+`, log.ExportID, normalizeExportFileName(log.FileName), log.ExportType, log.RowsExported, log.CreatedAt, normalizeOptionalLogText(log.PerformedBy))
 	if err != nil {
 		return fmt.Errorf("insert export log: %w", err)
 	}
@@ -277,7 +279,7 @@ UPDATE export_logs SET
     rows_exported = ?,
     performed_by = ?
 WHERE export_id = ?;
-`, log.FileName, log.ExportType, log.RowsExported, stringValue(log.PerformedBy), log.ExportID)
+`, normalizeExportFileName(log.FileName), log.ExportType, log.RowsExported, normalizeOptionalLogText(log.PerformedBy), log.ExportID)
 	if err != nil {
 		return fmt.Errorf("update export log: %w", err)
 	}
@@ -331,4 +333,49 @@ func scanExportLog(scanner rowScanner) (*model.ExportLog, error) {
 
 	item.PerformedBy = stringPtrFromNullString(performedBy)
 	return &item, nil
+}
+
+func normalizeImportReference(value string) string {
+	return normalizeLogPathLikeValue(value)
+}
+
+func normalizeImportFileName(value *string) any {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return normalizeLogPathLikeValue(trimmed)
+}
+
+func normalizeExportFileName(value string) string {
+	return normalizeLogPathLikeValue(value)
+}
+
+func normalizeOptionalLogText(value *string) any {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
+}
+
+func normalizeLogPathLikeValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	normalized := strings.ReplaceAll(trimmed, "\\", "/")
+	normalized = path.Clean(normalized)
+	base := path.Base(normalized)
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
 }

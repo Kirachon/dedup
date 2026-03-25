@@ -3,10 +3,15 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 
 	"dedup/internal/model"
 )
+
+const auditDetailRedactedValue = "[redacted]"
 
 // UpsertSetting inserts or updates a single application setting.
 func (r *Repository) UpsertSetting(ctx context.Context, setting *model.AppSetting) error {
@@ -167,6 +172,11 @@ func (r *Repository) createAuditLog(ctx context.Context, audit *model.AuditLog) 
 		return err
 	}
 
+	safeDetailsJSON, err := scrubAuditDetailsJSON(audit.DetailsJSON)
+	if err != nil {
+		return fmt.Errorf("scrub audit details: %w", err)
+	}
+
 	_, err = q.ExecContext(ctx, `
 INSERT INTO audit_logs (
     audit_id,
@@ -177,7 +187,7 @@ INSERT INTO audit_logs (
     details_json,
     created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?);
-`, audit.AuditID, audit.EntityType, audit.EntityID, audit.Action, audit.PerformedBy, stringValue(audit.DetailsJSON), audit.CreatedAt)
+`, audit.AuditID, audit.EntityType, audit.EntityID, audit.Action, audit.PerformedBy, stringValue(safeDetailsJSON), audit.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert audit log: %w", err)
 	}
@@ -205,4 +215,93 @@ func scanAuditLog(scanner rowScanner) (*model.AuditLog, error) {
 
 	item.DetailsJSON = stringPtrFromNullString(detailsJSON)
 	return &item, nil
+}
+
+func scrubAuditDetailsJSON(detailsJSON *string) (*string, error) {
+	if detailsJSON == nil {
+		return nil, nil
+	}
+
+	trimmed := strings.TrimSpace(*detailsJSON)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	var payload any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return nil, fmt.Errorf("unmarshal audit details json: %w", err)
+	}
+
+	scrubbed := scrubAuditValue("", payload)
+	encoded, err := json.Marshal(scrubbed)
+	if err != nil {
+		return nil, fmt.Errorf("marshal scrubbed audit details json: %w", err)
+	}
+
+	value := string(encoded)
+	return &value, nil
+}
+
+func scrubAuditValue(key string, value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		scrubbed := make(map[string]any, len(typed))
+		for childKey, childValue := range typed {
+			scrubbed[childKey] = scrubAuditValue(childKey, childValue)
+		}
+		return scrubbed
+	case []any:
+		scrubbed := make([]any, len(typed))
+		for i, childValue := range typed {
+			scrubbed[i] = scrubAuditValue(key, childValue)
+		}
+		return scrubbed
+	case string:
+		return scrubAuditString(key, typed)
+	default:
+		return value
+	}
+}
+
+func scrubAuditString(key, value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	normalizedKey := strings.ToLower(strings.TrimSpace(key))
+	switch normalizedKey {
+	case "notes", "remarks", "expected_confirmation":
+		return auditDetailRedactedValue
+	}
+
+	if strings.Contains(normalizedKey, "path") || strings.Contains(normalizedKey, "file") {
+		base := portableAuditPathBase(trimmed)
+		if base == "" {
+			return auditDetailRedactedValue
+		}
+		return base
+	}
+
+	if strings.Contains(normalizedKey, "source_reference") {
+		base := portableAuditPathBase(trimmed)
+		if base != "" {
+			return base
+		}
+	}
+
+	return trimmed
+}
+
+func portableAuditPathBase(value string) string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if normalized == "" {
+		return ""
+	}
+
+	base := path.Base(path.Clean(normalized))
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
 }

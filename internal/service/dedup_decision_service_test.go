@@ -94,6 +94,9 @@ func TestDedupDecisionServiceApplyDeleteAndResetRestoresBeneficiary(t *testing.T
 	if got, _ := appliedDetails["soft_deleted_internal_uuid"].(string); got != benA.InternalUUID {
 		t.Fatalf("unexpected soft-deleted uuid in apply audit details: %+v", appliedDetails)
 	}
+	if got, _ := appliedDetails["notes"].(string); got != redactedAuditNote {
+		t.Fatalf("expected redacted notes in apply audit details, got %+v", appliedDetails)
+	}
 
 	resetAt := time.Date(2026, time.March, 25, 15, 30, 0, 0, time.UTC)
 	resetSvc, err := NewDedupDecisionService(repo, WithDedupDecisionClock(func() time.Time { return resetAt }))
@@ -156,6 +159,9 @@ func TestDedupDecisionServiceApplyDeleteAndResetRestoresBeneficiary(t *testing.T
 	resetDetails := mustParseAuditDetails(t, resetAudits[0])
 	if got, _ := resetDetails["restored_internal_uuid"].(string); got != benA.InternalUUID {
 		t.Fatalf("unexpected restored uuid in reset audit details: %+v", resetDetails)
+	}
+	if got, _ := resetDetails["notes"].(string); got != redactedAuditNote {
+		t.Fatalf("expected redacted notes in reset audit details, got %+v", resetDetails)
 	}
 }
 
@@ -234,6 +240,10 @@ func TestDedupDecisionServiceRecomputeUpdatesDecisionInPlace(t *testing.T) {
 	if len(appliedAudits) != 1 {
 		t.Fatalf("expected exactly one apply audit, got %d", len(appliedAudits))
 	}
+	appliedDetails := mustParseAuditDetails(t, appliedAudits[0])
+	if got, _ := appliedDetails["notes"].(string); got != redactedAuditNote {
+		t.Fatalf("expected redacted notes in apply audit details, got %+v", appliedDetails)
+	}
 
 	recomputedAudits, err := repo.ListAuditLogs(ctx, repository.AuditLogQuery{Action: auditActionDecisionRecompute, Limit: 10})
 	if err != nil {
@@ -248,6 +258,9 @@ func TestDedupDecisionServiceRecomputeUpdatesDecisionInPlace(t *testing.T) {
 	}
 	if got, _ := recomputedDetails["decision"].(string); got != string(model.DedupDecisionDifferent) {
 		t.Fatalf("expected new decision marker in recompute audit, got %+v", recomputedDetails)
+	}
+	if got, _ := recomputedDetails["notes"].(string); got != redactedAuditNote {
+		t.Fatalf("expected redacted notes in recompute audit details, got %+v", recomputedDetails)
 	}
 }
 

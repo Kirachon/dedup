@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -440,6 +441,120 @@ func TestRepositoryDedupAndLogsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRepositoryAuditAndLogMetadataAreNormalized(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, cleanup := openTestRepository(t)
+	defer cleanup()
+
+	if err := repo.WithinTx(ctx, func(txRepo *Repository) error {
+		if err := txRepo.CreateAuditLog(ctx, &model.AuditLog{
+			AuditID:     "audit-sensitive",
+			EntityType:  "backup",
+			EntityID:    "entity-1",
+			Action:      "create",
+			PerformedBy: "tester",
+			DetailsJSON: stringPtr(`{"snapshot_path":"C:\\Users\\preda\\snapshots\\secret.db","manifest_path":"/var/tmp/secret.manifest.json","expected_confirmation":"RESTORE secret.db","notes":"very secret note","nested":{"db_path":"D:\\data\\live.db"}}`),
+			CreatedAt:   "2026-03-25T11:00:00Z",
+		}); err != nil {
+			return err
+		}
+		if err := txRepo.CreateImportLog(ctx, &model.ImportLog{
+			ImportID:        "import-sensitive",
+			SourceType:      model.ImportSourceCSV,
+			SourceReference: `C:\ingest\seed.csv`,
+			FileName:        stringPtr(`C:\ingest\incoming\seed.csv`),
+			FileHash:        stringPtr(" hash-1 "),
+			IdempotencyKey:  stringPtr(" idem-1 "),
+			RowsRead:        1,
+			RowsInserted:    1,
+			RowsSkipped:     0,
+			RowsFailed:      0,
+			Status:          "SUCCEEDED",
+			StartedAt:       "2026-03-25T11:00:00Z",
+			OperatorName:    stringPtr(" operator "),
+			Remarks:         stringPtr(" needs review "),
+			CheckpointToken: stringPtr(" checkpoint-1 "),
+		}); err != nil {
+			return err
+		}
+		if err := txRepo.CreateExportLog(ctx, &model.ExportLog{
+			ExportID:     "export-sensitive",
+			FileName:     `C:\exports\beneficiaries.csv`,
+			ExportType:   "BENEFICIARIES",
+			RowsExported: 1,
+			CreatedAt:    "2026-03-25T11:00:00Z",
+			PerformedBy:  stringPtr(" reviewer "),
+		}); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed normalized metadata transaction: %v", err)
+	}
+
+	audit, err := repo.GetAuditLog(ctx, "audit-sensitive")
+	if err != nil {
+		t.Fatalf("get sensitive audit log: %v", err)
+	}
+	if audit.DetailsJSON == nil {
+		t.Fatalf("expected sanitized audit details")
+	}
+	var details map[string]any
+	if err := json.Unmarshal([]byte(*audit.DetailsJSON), &details); err != nil {
+		t.Fatalf("unmarshal sanitized audit details: %v", err)
+	}
+
+	assertAuditDetailsString(t, details, "snapshot_path", portableAuditPathBase(`C:\Users\preda\snapshots\secret.db`))
+	assertAuditDetailsString(t, details, "manifest_path", portableAuditPathBase(`/var/tmp/secret.manifest.json`))
+	assertAuditDetailsString(t, details, "expected_confirmation", auditDetailRedactedValue)
+	assertAuditDetailsString(t, details, "notes", auditDetailRedactedValue)
+
+	nested, ok := details["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested audit details map, got %T", details["nested"])
+	}
+	assertAuditNestedString(t, nested, "db_path", portableAuditPathBase(`D:\data\live.db`))
+
+	importLog, err := repo.GetImportLog(ctx, "import-sensitive")
+	if err != nil {
+		t.Fatalf("get sensitive import log: %v", err)
+	}
+	if importLog.SourceReference != "seed.csv" {
+		t.Fatalf("unexpected normalized source reference: %s", importLog.SourceReference)
+	}
+	if importLog.FileName == nil || *importLog.FileName != "seed.csv" {
+		t.Fatalf("unexpected normalized import file name: %+v", importLog.FileName)
+	}
+	if importLog.FileHash == nil || strings.TrimSpace(*importLog.FileHash) != "hash-1" {
+		t.Fatalf("unexpected import file hash: %+v", importLog.FileHash)
+	}
+	if importLog.IdempotencyKey == nil || strings.TrimSpace(*importLog.IdempotencyKey) != "idem-1" {
+		t.Fatalf("unexpected import idempotency key: %+v", importLog.IdempotencyKey)
+	}
+	if importLog.OperatorName == nil || *importLog.OperatorName != "operator" {
+		t.Fatalf("unexpected import operator name: %+v", importLog.OperatorName)
+	}
+	if importLog.Remarks == nil || *importLog.Remarks != "needs review" {
+		t.Fatalf("unexpected import remarks: %+v", importLog.Remarks)
+	}
+	if importLog.CheckpointToken == nil || *importLog.CheckpointToken != "checkpoint-1" {
+		t.Fatalf("unexpected import checkpoint token: %+v", importLog.CheckpointToken)
+	}
+
+	exportLog, err := repo.GetExportLog(ctx, "export-sensitive")
+	if err != nil {
+		t.Fatalf("get sensitive export log: %v", err)
+	}
+	if exportLog.FileName != "beneficiaries.csv" {
+		t.Fatalf("unexpected normalized export file name: %s", exportLog.FileName)
+	}
+	if exportLog.PerformedBy == nil || *exportLog.PerformedBy != "reviewer" {
+		t.Fatalf("unexpected normalized export performed_by: %+v", exportLog.PerformedBy)
+	}
+}
+
 func TestRepositoryPSGCLookups(t *testing.T) {
 	t.Parallel()
 
@@ -618,4 +733,36 @@ func stringPtr(v string) *string {
 
 func int64Ptr(v int64) *int64 {
 	return &v
+}
+
+func assertAuditDetailsString(t *testing.T, details map[string]any, key, want string) {
+	t.Helper()
+
+	raw, ok := details[key]
+	if !ok {
+		t.Fatalf("expected audit detail key %q", key)
+	}
+	got, ok := raw.(string)
+	if !ok {
+		t.Fatalf("expected audit detail key %q to be string, got %T", key, raw)
+	}
+	if got != want {
+		t.Fatalf("unexpected audit detail %q: got=%q want=%q", key, got, want)
+	}
+}
+
+func assertAuditNestedString(t *testing.T, details map[string]any, key, want string) {
+	t.Helper()
+
+	raw, ok := details[key]
+	if !ok {
+		t.Fatalf("expected nested audit detail key %q", key)
+	}
+	got, ok := raw.(string)
+	if !ok {
+		t.Fatalf("expected nested audit detail key %q to be string, got %T", key, raw)
+	}
+	if got != want {
+		t.Fatalf("unexpected nested audit detail %q: got=%q want=%q", key, got, want)
+	}
 }

@@ -6,6 +6,7 @@
 - Final plan includes subagent-reviewed dependency fixes for recovery integrity, deterministic dedup, data protection, and release evidence gates.
 - Wave 5 follow-through landed: service-layer beneficiary workflow and deterministic dedup engine are now implemented, which unblocks the import, decision, and backup/restore waves.
 - Wave 6 follow-through landed: import preview/commit/resume, dedup decision workflow, and backup/restore snapshots are now implemented, which unblocks the export and data-protection waves.
+- Wave 7 follow-through landed: exporter safety and data-protection hardening are now implemented, which unblocks the UI integration wave.
 
 ### Scope Lock
 - In scope: offline single-workstation app; beneficiary CRUD with soft delete; dedup run/review; CSV + exchange import; CSV export; PSGC DB ingestion; audit/history; backup/restore; Windows packaging.
@@ -139,10 +140,10 @@ T5,T9,T10,T11,T12,T13,T15,T16 -> T17
 - **depends_on**: `[T7, T11]`
 - **location**: `internal/exporter/`
 - **description**: Export Excel-compatible CSV (BOM, quoting), enforce record policy filters, and protect against formula injection (`=`, `+`, `-`, `@`).
-- **validation**: Row accounting invariants pass; malicious fixture export opens safely.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **validation**: `go test ./internal/exporter` and `go test ./...` passed; row accounting and formula-injection fixtures are covered in exporter tests.
+- **status**: Completed
+- **log**: Added a new exporter package that writes UTF-8 BOM + quoted CRLF CSV, enforces final-record export policy (`ACTIVE`/`RETAINED` only), excludes `DELETED`, excludes unresolved duplicates by default unless explicitly enabled, neutralizes formula-like values, and records every successful export to `export_logs`.
+- **files edited/created**: `internal/exporter/types.go`, `internal/exporter/exporter.go`, `internal/exporter/exporter_test.go`
 
 ### T13: Backup/Restore Atomic Workflow
 - **depends_on**: `[T3, T4, T7, T8]`
@@ -157,10 +158,10 @@ T5,T9,T10,T11,T12,T13,T15,T16 -> T17
 - **depends_on**: `[T6, T7, T12]`
 - **location**: `internal/service/`, `internal/audit/`, `internal/exporter/`
 - **description**: Enforce PII-safe logs, audit redaction policy, export allowlist, and local directory permission checks.
-- **validation**: Security checklist and leakage regression tests pass.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **validation**: `go test ./...` passed; targeted repository/service safety tests cover audit scrubbing, metadata normalization, and non-writable snapshot directories.
+- **status**: Completed
+- **log**: Added service-layer audit redaction for backup snapshots and restore details, redacted dedup decision notes before persistence, hardened snapshot creation with a writable-directory probe, and normalized repository audit/import/export metadata before persistence.
+- **files edited/created**: `internal/service/backup_service.go`, `internal/service/backup_service_test.go`, `internal/service/dedup_decision_service.go`, `internal/service/dedup_decision_service_test.go`, `internal/repository/metadata.go`, `internal/repository/logs.go`, `internal/repository/repository_test.go`
 
 ### T15: Fyne UI Integration
 - **depends_on**: `[T5, T7, T8, T9, T11, T12, T13, T14]`

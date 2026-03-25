@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,7 +24,15 @@ import (
 const (
 	defaultBackupFilePrefix = "beneficiary-backup"
 	manifestVersionV1       = "backup_manifest_v1"
+	redactedPathValue       = "[redacted]"
 )
+
+var backupAuditPathKeys = map[string]struct{}{
+	"snapshot_path":    {},
+	"manifest_path":    {},
+	"pre_restore_path": {},
+	"db_path":          {},
+}
 
 var (
 	// ErrSnapshotOutputDirRequired means no output directory was provided.
@@ -213,6 +222,9 @@ func (s *BackupService) CreateSnapshot(ctx context.Context, req SnapshotRequest)
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create snapshot directory: %w", err)
+	}
+	if err := ensureSnapshotDirWritable(outputDir); err != nil {
+		return nil, err
 	}
 
 	nowUTC := s.now().UTC()
@@ -501,7 +513,8 @@ func (s *BackupService) checkpointWAL(ctx context.Context) error {
 
 func (s *BackupService) writeAudit(ctx context.Context, action, entityID, performedBy string, details map[string]any) BackupAuditEvent {
 	nowUTC := s.now().UTC().Format(time.RFC3339Nano)
-	payload, _ := json.Marshal(details)
+	safeDetails := sanitizeBackupAuditDetails(details)
+	payload, _ := json.Marshal(safeDetails)
 	detailsJSON := string(payload)
 
 	audit := BackupAuditEvent{
@@ -550,6 +563,85 @@ func normalizeActor(performedBy string) string {
 		return "system"
 	}
 	return performedBy
+}
+
+func ensureSnapshotDirWritable(path string) error {
+	path = filepath.Clean(path)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("inspect snapshot directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("snapshot output path is not a directory")
+	}
+
+	probeFile, err := os.CreateTemp(path, ".snapshot-write-check-*")
+	if err != nil {
+		return fmt.Errorf("snapshot output directory is not writable: %w", err)
+	}
+	probePath := probeFile.Name()
+	if err := probeFile.Close(); err != nil {
+		_ = os.Remove(probePath)
+		return fmt.Errorf("close snapshot directory write check file: %w", err)
+	}
+	if err := os.Remove(probePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cleanup snapshot directory write check file: %w", err)
+	}
+
+	return nil
+}
+
+func sanitizeBackupAuditDetails(details map[string]any) map[string]any {
+	if len(details) == 0 {
+		return details
+	}
+
+	safeDetails := make(map[string]any, len(details))
+	for key, value := range details {
+		if key == "expected_confirmation" {
+			safeDetails[key] = redactedPathValue
+			continue
+		}
+		if _, shouldSanitize := backupAuditPathKeys[key]; shouldSanitize {
+			safeDetails[key] = sanitizeAuditPathValue(value)
+			continue
+		}
+		safeDetails[key] = value
+	}
+
+	return safeDetails
+}
+
+func sanitizeAuditPathValue(value any) any {
+	pathValue, ok := value.(string)
+	if !ok {
+		return value
+	}
+
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		return ""
+	}
+
+	base := portablePathBase(pathValue)
+	if base == "" {
+		return redactedPathValue
+	}
+	return base
+}
+
+func portablePathBase(value string) string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if normalized == "" {
+		return ""
+	}
+
+	base := path.Base(path.Clean(normalized))
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
 }
 
 func listBlockingJobs(ctx context.Context, database *sql.DB) ([]BlockingJob, error) {

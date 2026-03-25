@@ -21,6 +21,7 @@ const (
 	auditActionDecisionApplied   = "DEDUP_DECISION_APPLIED"
 	auditActionDecisionReset     = "DEDUP_DECISION_RESET"
 	auditActionDecisionRecompute = "DEDUP_DECISION_RECOMPUTED"
+	redactedAuditNote            = "[redacted]"
 )
 
 // DedupDecisionOption configures DedupDecisionService behavior.
@@ -447,7 +448,8 @@ func createAuditLogTx(
 	details map[string]any,
 	createdAt string,
 ) error {
-	detailsJSON, err := json.Marshal(details)
+	safeDetails := sanitizeDedupAuditDetails(details)
+	detailsJSON, err := json.Marshal(safeDetails)
 	if err != nil {
 		return fmt.Errorf("marshal audit details: %w", err)
 	}
@@ -475,4 +477,29 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func sanitizeDedupAuditDetails(details map[string]any) map[string]any {
+	if len(details) == 0 {
+		return details
+	}
+
+	safeDetails := make(map[string]any, len(details))
+	for key, value := range details {
+		safeDetails[key] = value
+	}
+
+	rawNotes, hasNotes := safeDetails["notes"]
+	if !hasNotes {
+		return safeDetails
+	}
+
+	trimmed := strings.TrimSpace(fmt.Sprint(rawNotes))
+	if trimmed == "" {
+		delete(safeDetails, "notes")
+		return safeDetails
+	}
+
+	safeDetails["notes"] = redactedAuditNote
+	return safeDetails
 }

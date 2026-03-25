@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -79,6 +80,9 @@ func TestBackupServiceCreateSnapshotWritesMetadataManifest(t *testing.T) {
 	if result.AuditEvent.PerformedBy != "operator-a" {
 		t.Fatalf("unexpected audit actor: %s", result.AuditEvent.PerformedBy)
 	}
+	snapshotAuditDetails := mustParseBackupAuditDetails(t, result.AuditEvent.DetailsJSON)
+	assertAuditPathRedacted(t, snapshotAuditDetails, "snapshot_path", result.SnapshotPath)
+	assertAuditPathRedacted(t, snapshotAuditDetails, "manifest_path", result.ManifestPath)
 
 	count, err := countAuditByAction(context.Background(), svc.db, "BACKUP_CREATED")
 	if err != nil {
@@ -132,6 +136,9 @@ func TestBackupServiceValidateRestoreDryRunPasses(t *testing.T) {
 	if validation.AuditEvent.Action != "RESTORE_DRY_RUN" {
 		t.Fatalf("unexpected dry-run audit action: %s", validation.AuditEvent.Action)
 	}
+	validationAuditDetails := mustParseBackupAuditDetails(t, validation.AuditEvent.DetailsJSON)
+	assertAuditPathRedacted(t, validationAuditDetails, "snapshot_path", validation.SnapshotPath)
+	assertAuditPathRedacted(t, validationAuditDetails, "manifest_path", validation.ManifestPath)
 }
 
 func TestBackupServiceApplyRestoreReplacesLiveDBOnIdle(t *testing.T) {
@@ -179,6 +186,11 @@ func TestBackupServiceApplyRestoreReplacesLiveDBOnIdle(t *testing.T) {
 	if restore.AuditEvent.Action != "RESTORE_APPLIED" {
 		t.Fatalf("unexpected restore audit action: %s", restore.AuditEvent.Action)
 	}
+	restoreAuditDetails := mustParseBackupAuditDetails(t, restore.AuditEvent.DetailsJSON)
+	assertAuditPathRedacted(t, restoreAuditDetails, "snapshot_path", restore.SnapshotPath)
+	assertAuditPathRedacted(t, restoreAuditDetails, "manifest_path", restore.ManifestPath)
+	assertAuditPathRedacted(t, restoreAuditDetails, "pre_restore_path", restore.PreRestorePath)
+	assertAuditPathRedacted(t, restoreAuditDetails, "db_path", restore.DBPath)
 
 	value, err := readSettingValue(ctx, svc.db, "restore.fixture")
 	if err != nil {
@@ -222,6 +234,41 @@ func TestBackupServiceApplyRestoreBlocksWhenActiveJobs(t *testing.T) {
 	}
 	if !errors.Is(err, ErrRestoreBlockedActiveJobs) {
 		t.Fatalf("expected ErrRestoreBlockedActiveJobs, got %v", err)
+	}
+}
+
+func TestBackupServiceCreateSnapshotFailsWhenOutputDirNotWritable(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newBackupTestService(t)
+	defer cleanup()
+
+	outputDir := filepath.Join(t.TempDir(), "read-only-snapshots")
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		t.Fatalf("create output dir: %v", err)
+	}
+	if err := os.Chmod(outputDir, 0o555); err != nil {
+		t.Skipf("chmod not supported in test environment: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(outputDir, 0o755)
+	}()
+
+	probe, err := os.CreateTemp(outputDir, ".permission-probe-*")
+	if err == nil {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Skip("filesystem permits writes in read-only test directory; skipping writability guard test")
+	}
+
+	_, err = svc.CreateSnapshot(context.Background(), SnapshotRequest{
+		OutputDir: outputDir,
+	})
+	if err == nil {
+		t.Fatalf("expected snapshot creation to fail for non-writable directory")
+	}
+	if !strings.Contains(err.Error(), "not writable") {
+		t.Fatalf("expected non-writable directory error, got %v", err)
 	}
 }
 
@@ -283,4 +330,38 @@ WHERE action = ?;
 		return 0, err
 	}
 	return count, nil
+}
+
+func mustParseBackupAuditDetails(t *testing.T, detailsJSON string) map[string]any {
+	t.Helper()
+
+	var details map[string]any
+	if err := json.Unmarshal([]byte(detailsJSON), &details); err != nil {
+		t.Fatalf("unmarshal backup audit details: %v", err)
+	}
+	return details
+}
+
+func assertAuditPathRedacted(t *testing.T, details map[string]any, key, originalPath string) {
+	t.Helper()
+
+	rawValue, ok := details[key]
+	if !ok {
+		t.Fatalf("expected audit details key %q", key)
+	}
+	value, ok := rawValue.(string)
+	if !ok {
+		t.Fatalf("expected audit details key %q to be string, got %T", key, rawValue)
+	}
+
+	expected := portablePathBase(originalPath)
+	if expected == "" {
+		expected = redactedPathValue
+	}
+	if value != expected {
+		t.Fatalf("unexpected redacted value for %s: got=%q want=%q", key, value, expected)
+	}
+	if filepath.IsAbs(value) {
+		t.Fatalf("expected non-absolute audit value for %s, got %q", key, value)
+	}
 }
