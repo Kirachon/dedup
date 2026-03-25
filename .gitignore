@@ -1,0 +1,30 @@
+# Build outputs
+bin/
+dist/
+out/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+coverage.out
+
+# Databases and runtime state
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Context Engine local caches
+.context-engine-*
+.context-engine-plans/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# OS/editor clutter
+.DS_Store
+Thumbs.db
