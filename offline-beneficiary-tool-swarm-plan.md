@@ -4,6 +4,8 @@
 - Build the offline LGU desktop system using Go + Fyne + SQLite, using `lib_geo_map_2025_202603251312.csv` as the PSGC source loaded into local DB tables for fast cascading lookups.
 - Use a contract-first sequence so multiple agents can execute in parallel without behavior drift.
 - Final plan includes subagent-reviewed dependency fixes for recovery integrity, deterministic dedup, data protection, and release evidence gates.
+- Wave 5 follow-through landed: service-layer beneficiary workflow and deterministic dedup engine are now implemented, which unblocks the import, decision, and backup/restore waves.
+- Wave 6 follow-through landed: import preview/commit/resume, dedup decision workflow, and backup/restore snapshots are now implemented, which unblocks the export and data-protection waves.
 
 ### Scope Lock
 - In scope: offline single-workstation app; beneficiary CRUD with soft delete; dedup run/review; CSV + exchange import; CSV export; PSGC DB ingestion; audit/history; backup/restore; Windows packaging.
@@ -93,9 +95,9 @@ T5,T9,T10,T11,T12,T13,T15,T16 -> T17
 - **location**: `internal/service/`
 - **description**: Add normalization/validation, immutable visible ID generation, soft delete semantics, exact duplicate precheck prompt contract.
 - **validation**: Status transition, collision handling, and duplicate precheck tests pass.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **status**: Completed
+- **log**: Added a dedicated beneficiary service with deterministic normalization/validation, transactional visible-ID allocation, collision provenance tracking, soft-delete stamping, and duplicate precheck prompts.
+- **files edited/created**: `internal/service/beneficiary_service.go`, `internal/service/beneficiary_service_test.go`
 
 ### T8: Background Job Runtime and Journal
 - **depends_on**: `[T2, T3, T4]`
@@ -111,27 +113,27 @@ T5,T9,T10,T11,T12,T13,T15,T16 -> T17
 - **location**: `internal/importer/`, `internal/service/`
 - **description**: Implement CSV and exchange-package preview/commit, idempotency keys, resume checkpoints, provenance logging.
 - **validation**: Interrupted import resume test passes; repeated import remains idempotent.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **status**: Completed
+- **log**: Added the importer service with CSV and exchange-package preview/commit/resume support, manifest/checksum validation, PSGC-backed row projection, source-reference provenance, checkpointed partial runs, and idempotent repeat handling.
+- **files edited/created**: `internal/importer/importer.go`, `internal/importer/importer_test.go`
 
 ### T10: Deterministic Dedup Engine
 - **depends_on**: `[T6, T8]`
 - **location**: `internal/dedup/`, `internal/service/`
 - **description**: Implement candidate blocking plus required weighted formula and algorithms with stable tie-breaks.
 - **validation**: Golden determinism tests pass across repeated runs; threshold behavior verified.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **status**: Completed
+- **log**: Added a pure deterministic dedup engine with blocking, weighted scoring, compare-state outputs, and stable ordering across reordered input.
+- **files edited/created**: `internal/dedup/engine.go`, `internal/dedup/engine_test.go`
 
 ### T11: Dedup Decision Workflow
 - **depends_on**: `[T7, T10]`
 - **location**: `internal/service/`, `internal/audit/`
 - **description**: Implement retain/delete-as-soft-delete/different-person decisions, reversible reset/recompute behavior, and full audit lineage.
 - **validation**: Decision replay/reset tests pass.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **status**: Completed
+- **log**: Added a service-only dedup decision workflow with apply/reset paths, soft-delete restore on reset, in-place recompute lineage, and immutable audit-log evidence.
+- **files edited/created**: `internal/service/dedup_decision_service.go`, `internal/service/dedup_decision_service_test.go`
 
 ### T12: Export Pipeline and Safety
 - **depends_on**: `[T7, T11]`
@@ -147,9 +149,9 @@ T5,T9,T10,T11,T12,T13,T15,T16 -> T17
 - **location**: `internal/service/`, `internal/ui/dialogs/`
 - **description**: Implement snapshot/checksum restore flow with active-job quiesce, dry-run validation, typed confirmation, and audit logs.
 - **validation**: Restore drills pass for idle and active-job scenarios; no partial replay corruption.
-- **status**: Not Completed
-- **log**:
-- **files edited/created**:
+- **status**: Completed
+- **log**: Added a service-only backup/restore workflow with timestamped snapshots, manifest/checksum validation, typed confirmation, active-job blocking, rollback copy handling, and audit evidence.
+- **files edited/created**: `internal/service/backup_service.go`, `internal/service/backup_service_test.go`
 
 ### T14: Data Protection Controls
 - **depends_on**: `[T6, T7, T12]`
