@@ -38,8 +38,8 @@ func TestMigrateUpAndDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read version after migrate up: %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("expected version 1 after migrate up, got %d", version)
+	if version != 2 {
+		t.Fatalf("expected version 2 after migrate up, got %d", version)
 	}
 
 	requiredTables := []string{
@@ -59,6 +59,8 @@ func TestMigrateUpAndDown(t *testing.T) {
 		"psgc_cities",
 		"psgc_barangays",
 		"psgc_ingest_metadata",
+		"location_normalization_runs",
+		"location_normalization_items",
 	}
 
 	for _, tableName := range requiredTables {
@@ -80,6 +82,11 @@ func TestMigrateUpAndDown(t *testing.T) {
 		"idx_dedup_matches_pair_key",
 		"idx_dedup_matches_decision_status",
 		"ux_beneficiaries_source_reference_live",
+		"idx_location_normalization_runs_import_id",
+		"idx_location_normalization_runs_status_started_at",
+		"ux_location_normalization_items_run_row_number",
+		"idx_location_normalization_items_run_row",
+		"idx_location_normalization_items_status_review",
 	}
 
 	for _, indexName := range requiredIndexes {

@@ -691,6 +691,166 @@ INSERT INTO psgc_ingest_metadata (
 	}
 }
 
+func TestRepositoryLocationNormalizationLedgerRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, cleanup := openTestRepository(t)
+	defer cleanup()
+
+	if err := repo.WithinTx(ctx, func(txRepo *Repository) error {
+		if err := txRepo.CreateImportLog(ctx, &model.ImportLog{
+			ImportID:        "import-norm-1",
+			SourceType:      model.ImportSourceCSV,
+			SourceReference: "batch.csv",
+			Status:          "SUCCEEDED",
+			StartedAt:       "2026-03-25T12:00:00Z",
+		}); err != nil {
+			return err
+		}
+		if err := txRepo.CreateLocationNormalizationRun(ctx, &model.LocationNormalizationRun{
+			RunID:                "norm-run-1",
+			ImportID:             stringPtr("import-norm-1"),
+			SourceReference:      stringPtr("batch.csv"),
+			Mode:                 model.LocationNormalizationModeShadow,
+			Status:               "RUNNING",
+			NormalizationVersion: "v1-cleanlist-parity",
+			TotalRows:            2,
+			AutoAppliedRows:      1,
+			ReviewRows:           1,
+			FailedRows:           0,
+			StartedAt:            "2026-03-25T12:00:00Z",
+		}); err != nil {
+			return err
+		}
+		if err := txRepo.CreateLocationNormalizationItem(ctx, &model.LocationNormalizationItem{
+			ItemID:               "norm-item-1",
+			RunID:                "norm-run-1",
+			RowNumber:            7,
+			SourceReference:      stringPtr("row-7"),
+			RawRegion:            "Region One",
+			RawProvince:          "Alpha Province",
+			RawCity:              "Santa Cruz Cty",
+			RawBarangay:          "Sto Nino",
+			ResolvedRegionCode:   stringPtr("01"),
+			ResolvedRegionName:   stringPtr("Region One"),
+			ResolvedProvinceCode: stringPtr("0101"),
+			ResolvedProvinceName: stringPtr("Alpha Province"),
+			ResolvedCityCode:     stringPtr("010101"),
+			ResolvedCityName:     stringPtr("Santa Cruz City"),
+			ResolvedBarangayCode: stringPtr("010101001"),
+			ResolvedBarangayName: stringPtr("Sto. Niño"),
+			Confidence:           0.991,
+			MatchSource:          model.LocationMatchSourceFuzzy,
+			Status:               model.LocationNormalizationStatusAutoApplied,
+			NeedsReview:          false,
+			Reason:               nil,
+			NormalizationVersion: "v1-cleanlist-parity",
+			CreatedAt:            "2026-03-25T12:00:01Z",
+		}); err != nil {
+			return err
+		}
+		if err := txRepo.CreateLocationNormalizationItem(ctx, &model.LocationNormalizationItem{
+			ItemID:               "norm-item-2",
+			RunID:                "norm-run-1",
+			RowNumber:            8,
+			SourceReference:      stringPtr("row-8"),
+			RawRegion:            "Region One",
+			RawProvince:          "",
+			RawCity:              "San Jose City",
+			RawBarangay:          "Poblacion",
+			ResolvedRegionCode:   nil,
+			ResolvedRegionName:   nil,
+			ResolvedProvinceCode: nil,
+			ResolvedProvinceName: nil,
+			ResolvedCityCode:     nil,
+			ResolvedCityName:     nil,
+			ResolvedBarangayCode: nil,
+			ResolvedBarangayName: nil,
+			Confidence:           1,
+			MatchSource:          model.LocationMatchSourceFuzzy,
+			Status:               model.LocationNormalizationStatusReviewNeeded,
+			NeedsReview:          true,
+			Reason:               stringPtr("ambiguous location candidates"),
+			NormalizationVersion: "v1-cleanlist-parity",
+			CreatedAt:            "2026-03-25T12:00:01Z",
+		}); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed normalization ledger rows: %v", err)
+	}
+
+	if err := repo.UpdateLocationNormalizationRun(ctx, &model.LocationNormalizationRun{
+		RunID:                "norm-run-1",
+		ImportID:             stringPtr("import-norm-1"),
+		SourceReference:      stringPtr("batch.csv"),
+		Mode:                 model.LocationNormalizationModeShadow,
+		Status:               "COMPLETED",
+		NormalizationVersion: "v1-cleanlist-parity",
+		TotalRows:            2,
+		AutoAppliedRows:      1,
+		ReviewRows:           1,
+		FailedRows:           0,
+		StartedAt:            "2026-03-25T12:00:00Z",
+		CompletedAt:          stringPtr("2026-03-25T12:00:03Z"),
+	}); err != nil {
+		t.Fatalf("update normalization run: %v", err)
+	}
+
+	run, err := repo.GetLocationNormalizationRun(ctx, "norm-run-1")
+	if err != nil {
+		t.Fatalf("get normalization run: %v", err)
+	}
+	if run.Status != "COMPLETED" || run.CompletedAt == nil || *run.CompletedAt != "2026-03-25T12:00:03Z" {
+		t.Fatalf("unexpected normalization run state: %+v", run)
+	}
+	if run.NormalizationVersion != "v1-cleanlist-parity" {
+		t.Fatalf("expected normalization version to persist, got %q", run.NormalizationVersion)
+	}
+
+	runs, err := repo.ListLocationNormalizationRuns(ctx, LocationNormalizationRunListQuery{
+		ImportID: "import-norm-1",
+		Status:   "COMPLETED",
+		Mode:     "SHADOW",
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list normalization runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RunID != "norm-run-1" {
+		t.Fatalf("unexpected normalization run list: %+v", runs)
+	}
+
+	item, err := repo.GetLocationNormalizationItem(ctx, "norm-item-1")
+	if err != nil {
+		t.Fatalf("get normalization item: %v", err)
+	}
+	if item.NeedsReview || item.Status != model.LocationNormalizationStatusAutoApplied {
+		t.Fatalf("unexpected auto-applied item: %+v", item)
+	}
+	if item.ResolvedBarangayName == nil || *item.ResolvedBarangayName != "Sto. Niño" {
+		t.Fatalf("expected punctuation-preserving resolved barangay name, got %+v", item.ResolvedBarangayName)
+	}
+
+	reviewItems, err := repo.ListLocationNormalizationItems(ctx, LocationNormalizationItemListQuery{
+		RunID:       "norm-run-1",
+		Status:      string(model.LocationNormalizationStatusReviewNeeded),
+		NeedsReview: boolPtr(true),
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("list review-needed normalization items: %v", err)
+	}
+	if len(reviewItems) != 1 || reviewItems[0].ItemID != "norm-item-2" {
+		t.Fatalf("unexpected review-needed items: %+v", reviewItems)
+	}
+	if reviewItems[0].Reason == nil || *reviewItems[0].Reason != "ambiguous location candidates" {
+		t.Fatalf("expected persisted review reason, got %+v", reviewItems[0].Reason)
+	}
+}
+
 func beneficiaryFixture(internalUUID, generatedID, lastName, firstName, barangayCode string, status model.RecordStatus, dedupStatus model.DedupStatus) model.Beneficiary {
 	return model.Beneficiary{
 		InternalUUID:      internalUUID,
@@ -732,6 +892,10 @@ func stringPtr(v string) *string {
 }
 
 func int64Ptr(v int64) *int64 {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
 	return &v
 }
 

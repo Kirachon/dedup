@@ -27,6 +27,16 @@ Release payload includes:
 
 Installer and signing steps are intentionally deferred to a later wave.
 
+## Location Normalization and Backfill Notes
+
+- The packaged app uses PSGC-backed import-time normalization for
+  `region/province/city_municipality/barangay` in the public CSV template.
+- The app also includes a backfill workflow for previously stored records, with
+  dry-run and apply modes.
+- The Rust `cleanlist_rust` project is used only as a parity oracle for
+  normalization behavior and fixtures. It is not bundled or required at runtime
+  for this Go desktop application.
+
 ## Usage
 
 Build executable:

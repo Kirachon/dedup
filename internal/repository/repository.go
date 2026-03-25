@@ -162,6 +162,24 @@ type ExportLogListQuery struct {
 	Offset     int
 }
 
+// LocationNormalizationRunListQuery controls filtered run history reads.
+type LocationNormalizationRunListQuery struct {
+	ImportID string
+	Status   string
+	Mode     string
+	Limit    int
+	Offset   int
+}
+
+// LocationNormalizationItemListQuery controls filtered item history reads.
+type LocationNormalizationItemListQuery struct {
+	RunID       string
+	Status      string
+	NeedsReview *bool
+	Limit       int
+	Offset      int
+}
+
 // BeneficiaryRepository groups beneficiary operations.
 type BeneficiaryRepository interface {
 	CreateBeneficiary(context.Context, *model.Beneficiary) error
@@ -216,6 +234,17 @@ type LogRepository interface {
 	ListExportLogs(context.Context, ExportLogListQuery) ([]model.ExportLog, error)
 }
 
+// LocationNormalizationRepository groups run/item lineage operations.
+type LocationNormalizationRepository interface {
+	CreateLocationNormalizationRun(context.Context, *model.LocationNormalizationRun) error
+	UpdateLocationNormalizationRun(context.Context, *model.LocationNormalizationRun) error
+	GetLocationNormalizationRun(context.Context, string) (*model.LocationNormalizationRun, error)
+	ListLocationNormalizationRuns(context.Context, LocationNormalizationRunListQuery) ([]model.LocationNormalizationRun, error)
+	CreateLocationNormalizationItem(context.Context, *model.LocationNormalizationItem) error
+	GetLocationNormalizationItem(context.Context, string) (*model.LocationNormalizationItem, error)
+	ListLocationNormalizationItems(context.Context, LocationNormalizationItemListQuery) ([]model.LocationNormalizationItem, error)
+}
+
 // PSGCRepository groups read helpers for PSGC rows.
 type PSGCRepository interface {
 	GetRegion(context.Context, string) (*model.PSGCRegion, error)
@@ -237,6 +266,7 @@ type RepositoryAPI interface {
 	AuditRepository
 	DedupRepository
 	LogRepository
+	LocationNormalizationRepository
 	PSGCRepository
 	WithinTx(context.Context, func(*Repository) error) error
 }

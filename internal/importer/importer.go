@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"dedup/internal/locationnorm"
 	"dedup/internal/model"
 	"dedup/internal/repository"
 	"dedup/internal/service"
@@ -51,6 +52,8 @@ type Importer struct {
 	commitRowBudget int
 	catalogMu       sync.Mutex
 	catalog         *psgcCatalog
+	normalizerMu    sync.Mutex
+	normalizer      *locationnorm.LocationNormalizer
 }
 
 // ImportToken stores the stable source details used for preview/commit/resume.
@@ -70,6 +73,8 @@ type ImportToken struct {
 	RowsInserted    int                `json:"rows_inserted,omitempty"`
 	RowsSkipped     int                `json:"rows_skipped,omitempty"`
 	RowsFailed      int                `json:"rows_failed,omitempty"`
+	NormalizationVersion string        `json:"normalization_version,omitempty"`
+	NormalizationHash    string        `json:"normalization_hash,omitempty"`
 }
 
 type sourceDocument struct {
@@ -104,6 +109,30 @@ type commitState struct {
 	rowsSkipped     int
 	rowsFailed      int
 	nextRow         int
+}
+
+type normalizationLedgerRepository interface {
+	GetLocationNormalizationRun(ctx context.Context, runID string) (*model.LocationNormalizationRun, error)
+	CreateLocationNormalizationRun(ctx context.Context, run *model.LocationNormalizationRun) error
+	UpdateLocationNormalizationRun(ctx context.Context, run *model.LocationNormalizationRun) error
+	CreateLocationNormalizationItem(ctx context.Context, item *model.LocationNormalizationItem) error
+}
+
+type normalizationReviewRequiredError struct {
+	result model.LocationNormalizationResult
+}
+
+func (e *normalizationReviewRequiredError) Error() string {
+	reason := strings.TrimSpace(e.result.Reason)
+	if reason == "" {
+		reason = "location normalization needs operator review"
+	}
+	return fmt.Sprintf(
+		"location normalization review required (%s, confidence=%.2f): %s",
+		e.result.MatchSource,
+		e.result.Confidence,
+		reason,
+	)
 }
 
 type psgcCatalog struct {
@@ -156,6 +185,10 @@ func (i *Importer) Preview(ctx context.Context, source Source) (*PreviewReport, 
 	if err != nil {
 		return nil, err
 	}
+	normalizationVersion, normalizationHash, err := i.computeNormalizationMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	stats, sampleErrors, err := i.scanSource(ctx, doc, 0, false)
 	if err != nil {
@@ -166,14 +199,16 @@ func (i *Importer) Preview(ctx context.Context, source Source) (*PreviewReport, 
 	}
 
 	token, err := encodeImportToken(ImportToken{
-		Stage:           importTokenStagePreview,
-		SourceType:      doc.SourceType,
-		SourcePath:      doc.SourcePath,
-		SourceHash:      doc.SourceHash,
-		SourceReference: doc.SourceReference,
-		FileName:        doc.FileName,
-		OperatorName:    strings.TrimSpace(source.OperatorName),
-		CreatedAtUTC:    i.now().UTC().Format(time.RFC3339Nano),
+		Stage:                importTokenStagePreview,
+		SourceType:           doc.SourceType,
+		SourcePath:           doc.SourcePath,
+		SourceHash:           doc.SourceHash,
+		SourceReference:      doc.SourceReference,
+		FileName:             doc.FileName,
+		OperatorName:         strings.TrimSpace(source.OperatorName),
+		CreatedAtUTC:         i.now().UTC().Format(time.RFC3339Nano),
+		NormalizationVersion: normalizationVersion,
+		NormalizationHash:    normalizationHash,
 	})
 	if err != nil {
 		return nil, err
@@ -212,6 +247,9 @@ func (i *Importer) Commit(ctx context.Context, previewToken, idempotencyKey stri
 	}
 	if preview.Stage != importTokenStagePreview {
 		return nil, fmt.Errorf("preview token stage mismatch: %s", preview.Stage)
+	}
+	if err := i.validateNormalizationMetadata(ctx, preview); err != nil {
+		return nil, err
 	}
 
 	existing, err := i.findExistingImport(ctx, preview.SourceHash, idempotencyKey)
@@ -262,6 +300,9 @@ func (i *Importer) Resume(ctx context.Context, checkpointToken string) (*ImportR
 	if checkpoint.ImportID == "" {
 		return nil, fmt.Errorf("checkpoint token missing import id")
 	}
+	if err := i.validateNormalizationMetadata(ctx, checkpoint); err != nil {
+		return nil, err
+	}
 
 	doc, err := i.loadSourceDocumentFromToken(ctx, checkpoint)
 	if err != nil {
@@ -282,7 +323,7 @@ func (i *Importer) Resume(ctx context.Context, checkpointToken string) (*ImportR
 	state := commitState{
 		importID:        checkpoint.ImportID,
 		idempotencyKey:  checkpoint.IdempotencyKey,
-		preview:         ImportToken{Stage: importTokenStagePreview, SourceType: checkpoint.SourceType, SourcePath: checkpoint.SourcePath, SourceHash: checkpoint.SourceHash, SourceReference: checkpoint.SourceReference, FileName: checkpoint.FileName, OperatorName: checkpoint.OperatorName, CreatedAtUTC: checkpoint.CreatedAtUTC},
+		preview:         ImportToken{Stage: importTokenStagePreview, SourceType: checkpoint.SourceType, SourcePath: checkpoint.SourcePath, SourceHash: checkpoint.SourceHash, SourceReference: checkpoint.SourceReference, FileName: checkpoint.FileName, OperatorName: checkpoint.OperatorName, CreatedAtUTC: checkpoint.CreatedAtUTC, NormalizationVersion: checkpoint.NormalizationVersion, NormalizationHash: checkpoint.NormalizationHash},
 		document:        doc,
 		startRow:        checkpoint.NextRow,
 		commitRowBudget: i.commitRowBudget,
@@ -492,7 +533,7 @@ func (i *Importer) scanSource(ctx context.Context, doc sourceDocument, startRow 
 
 		stats.Total++
 
-		_, _, _, validationErr := i.buildDraftFromRecord(ctx, doc, record, rowIndex)
+		_, _, _, _, validationErr := i.buildDraftFromRecord(ctx, doc, record, rowIndex)
 		if validationErr != nil {
 			stats.Invalid++
 			if len(sampleErrors) < maxSampleErrors {
@@ -522,6 +563,7 @@ func (i *Importer) runImport(ctx context.Context, state commitState, resumed boo
 	if state.preview.CreatedAtUTC != "" && !resumed {
 		startedAt = state.preview.CreatedAtUTC
 	}
+	remarks := normalizationLogRemarks(state.preview.NormalizationVersion, state.preview.NormalizationHash)
 	log := &model.ImportLog{
 		ImportID:        state.importID,
 		SourceType:      state.document.SourceType,
@@ -536,6 +578,7 @@ func (i *Importer) runImport(ctx context.Context, state commitState, resumed boo
 		Status:          importStatusRunning,
 		StartedAt:       startedAt,
 		OperatorName:    stringPtr(state.preview.OperatorName),
+		Remarks:         stringPtr(remarks),
 	}
 
 	if resumed {
@@ -594,6 +637,120 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 	result.Status = importStatusRunning
 	log.Status = importStatusRunning
 
+	ledgerRepo := i.normalizationLedgerRepository()
+	var normalizationRun *model.LocationNormalizationRun
+	if ledgerRepo != nil {
+		version := strings.TrimSpace(state.preview.NormalizationVersion)
+		if version == "" {
+			version = locationnorm.NormalizationVersion
+		}
+		importID := state.importID
+		sourceReference := state.document.SourceReference
+		runID := state.importID + "-location-normalization"
+		existingRun, err := ledgerRepo.GetLocationNormalizationRun(ctx, runID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("load location normalization run: %w", err)
+		}
+		if existingRun != nil {
+			normalizationRun = existingRun
+		} else {
+			normalizationRun = &model.LocationNormalizationRun{
+				RunID:                runID,
+				ImportID:             &importID,
+				SourceReference:      &sourceReference,
+				Mode:                 model.LocationNormalizationModeWrite,
+				Status:               "RUNNING",
+				NormalizationVersion: version,
+				TotalRows:            0,
+				AutoAppliedRows:      0,
+				ReviewRows:           0,
+				FailedRows:           0,
+				StartedAt:            i.now().UTC().Format(time.RFC3339Nano),
+				CompletedAt:          nil,
+			}
+			if err := ledgerRepo.CreateLocationNormalizationRun(ctx, normalizationRun); err != nil {
+				return nil, fmt.Errorf("create location normalization run: %w", err)
+			}
+		}
+	}
+
+	persistRun := func(status string, completed bool) error {
+		if normalizationRun == nil {
+			return nil
+		}
+		normalizationRun.Status = status
+		normalizationRun.TotalRows = result.RowsRead
+		normalizationRun.FailedRows = result.RowsFailed
+		if completed {
+			nowUTC := i.now().UTC().Format(time.RFC3339Nano)
+			normalizationRun.CompletedAt = &nowUTC
+		} else {
+			normalizationRun.CompletedAt = nil
+		}
+		return ledgerRepo.UpdateLocationNormalizationRun(ctx, normalizationRun)
+	}
+	markRunFailedOnError := normalizationRun != nil
+	defer func() {
+		if !markRunFailedOnError {
+			return
+		}
+		_ = persistRun("FAILED", true)
+	}()
+
+	recordNormalizationItem := func(rowNumber int, rowSourceReference string, normalizationResult *model.LocationNormalizationResult, reason error) error {
+		if normalizationRun == nil || normalizationResult == nil {
+			return nil
+		}
+
+		status := normalizationResult.Status
+		needsReview := normalizationResult.NeedsReview
+		if reason != nil {
+			var reviewErr *normalizationReviewRequiredError
+			if errors.As(reason, &reviewErr) {
+				status = model.LocationNormalizationStatusReviewNeeded
+				needsReview = true
+			}
+		}
+		if status == model.LocationNormalizationStatusAutoApplied {
+			normalizationRun.AutoAppliedRows++
+		} else {
+			normalizationRun.ReviewRows++
+		}
+
+		itemReason := strings.TrimSpace(normalizationResult.Reason)
+		if reason != nil && itemReason == "" {
+			itemReason = reason.Error()
+		}
+
+		nowUTC := i.now().UTC().Format(time.RFC3339Nano)
+		item := &model.LocationNormalizationItem{
+			ItemID:               uuid.NewString(),
+			RunID:                normalizationRun.RunID,
+			RowNumber:            rowNumber,
+			SourceReference:      stringPtr(rowSourceReference),
+			RawRegion:            normalizationResult.Raw.Region,
+			RawProvince:          normalizationResult.Raw.Province,
+			RawCity:              normalizationResult.Raw.City,
+			RawBarangay:          normalizationResult.Raw.Barangay,
+			ResolvedRegionCode:   stringPtr(normalizationResult.Resolved.RegionCode),
+			ResolvedRegionName:   stringPtr(normalizationResult.Resolved.RegionName),
+			ResolvedProvinceCode: stringPtr(normalizationResult.Resolved.ProvinceCode),
+			ResolvedProvinceName: stringPtr(normalizationResult.Resolved.ProvinceName),
+			ResolvedCityCode:     stringPtr(normalizationResult.Resolved.CityCode),
+			ResolvedCityName:     stringPtr(normalizationResult.Resolved.CityName),
+			ResolvedBarangayCode: stringPtr(normalizationResult.Resolved.BarangayCode),
+			ResolvedBarangayName: stringPtr(normalizationResult.Resolved.BarangayName),
+			Confidence:           normalizationResult.Confidence,
+			MatchSource:          normalizationResult.MatchSource,
+			Status:               status,
+			NeedsReview:          needsReview,
+			Reason:               stringPtr(itemReason),
+			NormalizationVersion: normalizationResult.NormalizationVersion,
+			CreatedAt:            nowUTC,
+		}
+		return ledgerRepo.CreateLocationNormalizationItem(ctx, item)
+	}
+
 	for {
 		if err := ctx.Err(); err != nil {
 			break
@@ -615,14 +772,39 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 		result.RowsRead++
 		log.RowsRead = result.RowsRead
 
-		draft, rowSourceReference, preferredGeneratedID, err := i.buildDraftFromRecord(ctx, state.document, record, rowIndex)
+		draft, rowSourceReference, preferredGeneratedID, normalizationResult, err := i.buildDraftFromRecord(ctx, state.document, record, rowIndex)
 		if err != nil {
-			result.RowsFailed++
-			log.RowsFailed = result.RowsFailed
+			var reviewErr *normalizationReviewRequiredError
+			if errors.As(err, &reviewErr) {
+				result.RowsSkipped++
+				log.RowsSkipped = result.RowsSkipped
+			} else {
+				result.RowsFailed++
+				log.RowsFailed = result.RowsFailed
+			}
+			if recErr := recordNormalizationItem(rowIndex, rowSourceReference, normalizationResult, err); recErr != nil {
+				return nil, recErr
+			}
 			if err := i.updateImportLog(ctx, log); err != nil {
 				return nil, err
 			}
+			if state.commitRowBudget > 0 && result.RowsRead >= state.commitRowBudget {
+				next := i.makeCheckpointToken(state, result, rowIndex+1, importTokenStageCheckpoint)
+				log.Status = importStatusPartial
+				log.CheckpointToken = stringPtr(next)
+				if err := i.updateImportLog(ctx, log); err != nil {
+					return nil, err
+				}
+				if err := persistRun("PARTIAL", false); err != nil {
+					return nil, err
+				}
+				markRunFailedOnError = false
+				return i.resultFromPartial(log, next), nil
+			}
 			continue
+		}
+		if recErr := recordNormalizationItem(rowIndex, rowSourceReference, normalizationResult, nil); recErr != nil {
+			return nil, recErr
 		}
 
 		exists, err := i.hasSourceReference(ctx, rowSourceReference)
@@ -642,6 +824,10 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 				if err := i.updateImportLog(ctx, log); err != nil {
 					return nil, err
 				}
+				if err := persistRun("PARTIAL", false); err != nil {
+					return nil, err
+				}
+				markRunFailedOnError = false
 				return i.resultFromPartial(log, next), nil
 			}
 			continue
@@ -669,6 +855,10 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 				if err := i.updateImportLog(ctx, log); err != nil {
 					return nil, err
 				}
+				if err := persistRun("PARTIAL", false); err != nil {
+					return nil, err
+				}
+				markRunFailedOnError = false
 				return i.resultFromPartial(log, next), nil
 			}
 			continue
@@ -706,6 +896,10 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 			if err := i.updateImportLog(ctx, log); err != nil {
 				return nil, err
 			}
+			if err := persistRun("PARTIAL", false); err != nil {
+				return nil, err
+			}
+			markRunFailedOnError = false
 			return i.resultFromPartial(log, next), nil
 		}
 	}
@@ -721,6 +915,10 @@ func (i *Importer) processImport(ctx context.Context, state commitState, log *mo
 	if err := i.updateImportLog(ctx, log); err != nil {
 		return nil, err
 	}
+	if err := persistRun("COMPLETED", true); err != nil {
+		return nil, err
+	}
+	markRunFailedOnError = false
 	return importResultFromLog(log), nil
 }
 
@@ -739,21 +937,23 @@ func (i *Importer) makeCheckpointToken(state commitState, result *ImportResult, 
 		result = &ImportResult{}
 	}
 	token := ImportToken{
-		Stage:           stage,
-		SourceType:      state.document.SourceType,
-		SourcePath:      state.document.SourcePath,
-		SourceHash:      state.document.SourceHash,
-		SourceReference: state.document.SourceReference,
-		FileName:        state.document.FileName,
-		OperatorName:    state.preview.OperatorName,
-		CreatedAtUTC:    state.preview.CreatedAtUTC,
-		ImportID:        state.importID,
-		IdempotencyKey:  state.idempotencyKey,
-		NextRow:         nextRow,
-		RowsRead:        result.RowsRead,
-		RowsInserted:    result.RowsInserted,
-		RowsSkipped:     result.RowsSkipped,
-		RowsFailed:      result.RowsFailed,
+		Stage:                stage,
+		SourceType:           state.document.SourceType,
+		SourcePath:           state.document.SourcePath,
+		SourceHash:           state.document.SourceHash,
+		SourceReference:      state.document.SourceReference,
+		FileName:             state.document.FileName,
+		OperatorName:         state.preview.OperatorName,
+		CreatedAtUTC:         state.preview.CreatedAtUTC,
+		ImportID:             state.importID,
+		IdempotencyKey:       state.idempotencyKey,
+		NextRow:              nextRow,
+		RowsRead:             result.RowsRead,
+		RowsInserted:         result.RowsInserted,
+		RowsSkipped:          result.RowsSkipped,
+		RowsFailed:           result.RowsFailed,
+		NormalizationVersion: state.preview.NormalizationVersion,
+		NormalizationHash:    state.preview.NormalizationHash,
 	}
 	encoded, err := encodeImportToken(token)
 	if err != nil {
@@ -820,18 +1020,19 @@ func (i *Importer) hasSourceReference(ctx context.Context, sourceReference strin
 	return false, nil
 }
 
-func (i *Importer) buildDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, error) {
+func (i *Importer) buildDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, *model.LocationNormalizationResult, error) {
 	switch len(record) {
 	case len(publicBeneficiaryHeaders):
 		return i.buildPublicDraftFromRecord(ctx, doc, record, rowIndex)
 	case len(legacyBeneficiaryHeaders):
 		return i.buildLegacyDraftFromRecord(ctx, doc, record, rowIndex)
 	default:
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: expected %d columns for the public template or %d columns for the legacy package layout, got %d", rowIndex, len(publicBeneficiaryHeaders), len(legacyBeneficiaryHeaders), len(record))
+		return service.BeneficiaryDraft{}, "", "", nil, fmt.Errorf("row %d: expected %d columns for the public template or %d columns for the legacy package layout, got %d", rowIndex, len(publicBeneficiaryHeaders), len(legacyBeneficiaryHeaders), len(record))
 	}
 }
 
-func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, error) {
+func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, *model.LocationNormalizationResult, error) {
+	rowSourceReference := rowProvenance(doc.SourceReference, rowIndex)
 	preferredGeneratedID := strings.TrimSpace(record[0])
 	lastName := strings.TrimSpace(record[1])
 	firstName := strings.TrimSpace(record[2])
@@ -848,28 +1049,33 @@ func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDoc
 	sex := strings.TrimSpace(record[13])
 
 	if regionValue == "" || provinceValue == "" || cityValue == "" || barangayValue == "" {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: region, province, city_municipality, and barangay are required", rowIndex)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: region, province, city_municipality, and barangay are required", rowIndex)
 	}
 
-	catalog, err := i.getPSGCCatalog(ctx)
+	normalizer, err := i.getLocationNormalizer(ctx)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load PSGC catalog: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: load location normalizer: %w", rowIndex, err)
 	}
-	location, err := catalog.resolvePublicLocation(regionValue, provinceValue, cityValue, barangayValue)
-	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+	normalization := normalizer.NormalizeChain(model.LocationChainRaw{
+		Region:   regionValue,
+		Province: provinceValue,
+		City:     cityValue,
+		Barangay: barangayValue,
+	})
+	if !normalization.AutoApply || normalization.NeedsReview {
+		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, &normalizationReviewRequiredError{result: normalization}
 	}
 	birthMonth, err := parseNullableInt64Field(birthMonthText, "month_mm")
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, fmt.Errorf("row %d: %w", rowIndex, err)
 	}
 	birthDay, err := parseNullableInt64Field(birthDayText, "day_dd")
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, fmt.Errorf("row %d: %w", rowIndex, err)
 	}
 	birthYear, err := parseNullableInt64Field(birthYearText, "year_yyyy")
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, fmt.Errorf("row %d: %w", rowIndex, err)
 	}
 
 	draft := service.BeneficiaryDraft{
@@ -877,14 +1083,14 @@ func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDoc
 		FirstName:     firstName,
 		MiddleName:    middleName,
 		ExtensionName: extensionName,
-		RegionCode:    location.RegionCode,
-		RegionName:    location.RegionName,
-		ProvinceCode:  location.ProvinceCode,
-		ProvinceName:  location.ProvinceName,
-		CityCode:      location.CityCode,
-		CityName:      location.CityName,
-		BarangayCode:  location.BarangayCode,
-		BarangayName:  location.BarangayName,
+		RegionCode:    normalization.Resolved.RegionCode,
+		RegionName:    normalization.Resolved.RegionName,
+		ProvinceCode:  normalization.Resolved.ProvinceCode,
+		ProvinceName:  normalization.Resolved.ProvinceName,
+		CityCode:      normalization.Resolved.CityCode,
+		CityName:      normalization.Resolved.CityName,
+		BarangayCode:  normalization.Resolved.BarangayCode,
+		BarangayName:  normalization.Resolved.BarangayName,
 		ContactNo:     contactNo,
 		BirthMonth:    birthMonth,
 		BirthDay:      birthDay,
@@ -893,14 +1099,14 @@ func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDoc
 	}
 
 	if _, err := i.creator.NormalizeAndValidateDraft(draft); err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, fmt.Errorf("row %d: %w", rowIndex, err)
 	}
 
-	rowSourceReference := rowProvenance(doc.SourceReference, rowIndex)
-	return draft, rowSourceReference, preferredGeneratedID, nil
+	return draft, rowSourceReference, preferredGeneratedID, &normalization, nil
 }
 
-func (i *Importer) buildLegacyDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, error) {
+func (i *Importer) buildLegacyDraftFromRecord(ctx context.Context, doc sourceDocument, record []string, rowIndex int) (service.BeneficiaryDraft, string, string, *model.LocationNormalizationResult, error) {
+	rowSourceReference := rowProvenance(doc.SourceReference, rowIndex)
 	preferredGeneratedID := strings.TrimSpace(record[0])
 	lastName := strings.TrimSpace(record[1])
 	firstName := strings.TrimSpace(record[2])
@@ -915,46 +1121,46 @@ func (i *Importer) buildLegacyDraftFromRecord(ctx context.Context, doc sourceDoc
 	contactNo := strings.TrimSpace(record[11])
 
 	if regionCode == "" || provinceCode == "" || cityCode == "" || barangayCode == "" {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: location codes are required", rowIndex)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: location codes are required", rowIndex)
 	}
 
 	region, err := i.repo.GetRegion(ctx, regionCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load region %s: %w", rowIndex, regionCode, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: load region %s: %w", rowIndex, regionCode, err)
 	}
 	province, err := i.repo.GetProvince(ctx, provinceCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load province %s: %w", rowIndex, provinceCode, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: load province %s: %w", rowIndex, provinceCode, err)
 	}
 	city, err := i.repo.GetCity(ctx, cityCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load city %s: %w", rowIndex, cityCode, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: load city %s: %w", rowIndex, cityCode, err)
 	}
 	barangay, err := i.repo.GetBarangay(ctx, barangayCode)
 	if err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: load barangay %s: %w", rowIndex, barangayCode, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: load barangay %s: %w", rowIndex, barangayCode, err)
 	}
 
 	if strings.TrimSpace(region.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: region code mismatch", rowIndex)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: region code mismatch", rowIndex)
 	}
 	if strings.TrimSpace(province.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: province %s does not belong to region %s", rowIndex, provinceCode, regionCode)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: province %s does not belong to region %s", rowIndex, provinceCode, regionCode)
 	}
 	if strings.TrimSpace(city.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: city %s does not belong to region %s", rowIndex, cityCode, regionCode)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: city %s does not belong to region %s", rowIndex, cityCode, regionCode)
 	}
 	if city.ProvinceCode != nil && strings.TrimSpace(*city.ProvinceCode) != provinceCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: city %s does not belong to province %s", rowIndex, cityCode, provinceCode)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: city %s does not belong to province %s", rowIndex, cityCode, provinceCode)
 	}
 	if strings.TrimSpace(barangay.RegionCode) != regionCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: barangay %s does not belong to region %s", rowIndex, barangayCode, regionCode)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: barangay %s does not belong to region %s", rowIndex, barangayCode, regionCode)
 	}
 	if barangay.ProvinceCode != nil && strings.TrimSpace(*barangay.ProvinceCode) != provinceCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: barangay %s does not belong to province %s", rowIndex, barangayCode, provinceCode)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: barangay %s does not belong to province %s", rowIndex, barangayCode, provinceCode)
 	}
 	if strings.TrimSpace(barangay.CityCode) != cityCode {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: barangay %s does not belong to city %s", rowIndex, barangayCode, cityCode)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: barangay %s does not belong to city %s", rowIndex, barangayCode, cityCode)
 	}
 
 	draft := service.BeneficiaryDraft{
@@ -976,11 +1182,34 @@ func (i *Importer) buildLegacyDraftFromRecord(ctx context.Context, doc sourceDoc
 	}
 
 	if _, err := i.creator.NormalizeAndValidateDraft(draft); err != nil {
-		return service.BeneficiaryDraft{}, "", "", fmt.Errorf("row %d: %w", rowIndex, err)
+		return service.BeneficiaryDraft{}, rowSourceReference, "", nil, fmt.Errorf("row %d: %w", rowIndex, err)
 	}
 
-	rowSourceReference := rowProvenance(doc.SourceReference, rowIndex)
-	return draft, rowSourceReference, preferredGeneratedID, nil
+	result := model.LocationNormalizationResult{
+		Raw: model.LocationChainRaw{
+			Region:   regionCode,
+			Province: provinceCode,
+			City:     cityCode,
+			Barangay: barangayCode,
+		},
+		Resolved: model.LocationChainResolved{
+			RegionCode:   region.RegionCode,
+			RegionName:   region.RegionName,
+			ProvinceCode: province.ProvinceCode,
+			ProvinceName: province.ProvinceName,
+			CityCode:     city.CityCode,
+			CityName:     city.CityName,
+			BarangayCode: barangay.BarangayCode,
+			BarangayName: barangay.BarangayName,
+		},
+		Confidence:           1,
+		MatchSource:          model.LocationMatchSourceExact,
+		Status:               model.LocationNormalizationStatusAutoApplied,
+		NeedsReview:          false,
+		AutoApply:            true,
+		NormalizationVersion: locationnorm.NormalizationVersion,
+	}
+	return draft, rowSourceReference, preferredGeneratedID, &result, nil
 }
 
 func validateImportHeader(header []string) error {
@@ -1006,6 +1235,61 @@ func headerMatches(header []string, expected []string) bool {
 	return true
 }
 
+func (i *Importer) normalizationLedgerRepository() normalizationLedgerRepository {
+	repo, ok := i.repo.(normalizationLedgerRepository)
+	if !ok {
+		return nil
+	}
+	return repo
+}
+
+func (i *Importer) computeNormalizationMetadata(ctx context.Context) (string, string, error) {
+	version := locationnorm.NormalizationVersion
+	checksum := ""
+	metadata, err := i.repo.GetIngestMetadata(ctx)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("load psgc ingest metadata: %w", err)
+	}
+	if metadata != nil {
+		checksum = strings.TrimSpace(metadata.SourceChecksum)
+	}
+	basis := version + "|" + checksum
+	sum := sha256.Sum256([]byte(basis))
+	return version, hex.EncodeToString(sum[:]), nil
+}
+
+func (i *Importer) validateNormalizationMetadata(ctx context.Context, token ImportToken) error {
+	if strings.TrimSpace(token.NormalizationVersion) == "" || strings.TrimSpace(token.NormalizationHash) == "" {
+		return nil
+	}
+	currentVersion, currentHash, err := i.computeNormalizationMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if token.NormalizationVersion != currentVersion || token.NormalizationHash != currentHash {
+		return fmt.Errorf(
+			"normalization metadata mismatch: token version/hash (%s/%s) != current (%s/%s)",
+			token.NormalizationVersion,
+			token.NormalizationHash,
+			currentVersion,
+			currentHash,
+		)
+	}
+	return nil
+}
+
+func normalizationLogRemarks(version, hash string) string {
+	meta := map[string]string{
+		"normalization_version": strings.TrimSpace(version),
+		"normalization_hash":    strings.TrimSpace(hash),
+	}
+	body, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Sprintf("normalization_version=%s normalization_hash=%s", strings.TrimSpace(version), strings.TrimSpace(hash))
+	}
+	return string(body)
+}
+
 type resolvedPSGCLocation struct {
 	RegionCode   string
 	RegionName   string
@@ -1015,6 +1299,93 @@ type resolvedPSGCLocation struct {
 	CityName     string
 	BarangayCode string
 	BarangayName string
+}
+
+func (i *Importer) getLocationNormalizer(ctx context.Context) (*locationnorm.LocationNormalizer, error) {
+	i.normalizerMu.Lock()
+	normalizer := i.normalizer
+	i.normalizerMu.Unlock()
+	if normalizer != nil {
+		return normalizer, nil
+	}
+
+	catalog, err := i.getPSGCCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	regions, provinces, cities, barangays := flattenPSGCCatalog(catalog)
+	locCatalog, err := locationnorm.NewCatalog(regions, provinces, cities, barangays)
+	if err != nil {
+		return nil, fmt.Errorf("build location normalization catalog: %w", err)
+	}
+	built, err := locationnorm.New(locCatalog)
+	if err != nil {
+		return nil, fmt.Errorf("build location normalizer: %w", err)
+	}
+
+	i.normalizerMu.Lock()
+	defer i.normalizerMu.Unlock()
+	if i.normalizer == nil {
+		i.normalizer = built
+	}
+	return i.normalizer, nil
+}
+
+func flattenPSGCCatalog(catalog *psgcCatalog) ([]model.PSGCRegion, []model.PSGCProvince, []model.PSGCCity, []model.PSGCBarangay) {
+	if catalog == nil {
+		return nil, nil, nil, nil
+	}
+	regions := append([]model.PSGCRegion(nil), catalog.regions...)
+
+	provinces := make([]model.PSGCProvince, 0)
+	seenProvince := make(map[string]struct{})
+	for _, items := range catalog.provincesByRegion {
+		for _, item := range items {
+			key := strings.TrimSpace(item.ProvinceCode)
+			if key == "" {
+				continue
+			}
+			if _, exists := seenProvince[key]; exists {
+				continue
+			}
+			seenProvince[key] = struct{}{}
+			provinces = append(provinces, item)
+		}
+	}
+
+	cities := make([]model.PSGCCity, 0)
+	seenCity := make(map[string]struct{})
+	for _, items := range catalog.citiesByProvince {
+		for _, item := range items {
+			key := strings.TrimSpace(item.CityCode)
+			if key == "" {
+				continue
+			}
+			if _, exists := seenCity[key]; exists {
+				continue
+			}
+			seenCity[key] = struct{}{}
+			cities = append(cities, item)
+		}
+	}
+
+	barangays := make([]model.PSGCBarangay, 0)
+	seenBarangay := make(map[string]struct{})
+	for _, items := range catalog.barangaysByCity {
+		for _, item := range items {
+			key := strings.TrimSpace(item.BarangayCode)
+			if key == "" {
+				continue
+			}
+			if _, exists := seenBarangay[key]; exists {
+				continue
+			}
+			seenBarangay[key] = struct{}{}
+			barangays = append(barangays, item)
+		}
+	}
+
+	return regions, provinces, cities, barangays
 }
 
 func (i *Importer) getPSGCCatalog(ctx context.Context) (*psgcCatalog, error) {

@@ -269,10 +269,10 @@ func TestWorkflowSmoke(t *testing.T) {
 			FirstName:        "Ben",
 			MiddleName:       "T",
 			ExtensionName:    "",
-			Region:           location.RegionName,
-			Province:         location.ProvinceName,
-			CityMunicipality: location.CityName,
-			Barangay:         location.BarangayName,
+			Region:           "  " + strings.ToLower(location.RegionName) + "  ",
+			Province:         strings.ToUpper(location.ProvinceName),
+			CityMunicipality: strings.Replace(location.CityName, "City", "Cty", 1),
+			Barangay:         strings.Replace(location.BarangayName, "Sto.", "Sto", 1),
 			ContactNo:        "09170000002",
 			MonthMM:          "03",
 			DayDD:            "04",
@@ -285,10 +285,10 @@ func TestWorkflowSmoke(t *testing.T) {
 			FirstName:        "Carla",
 			MiddleName:       "B",
 			ExtensionName:    "",
-			Region:           location.RegionName,
-			Province:         location.ProvinceName,
-			CityMunicipality: location.CityName,
-			Barangay:         location.BarangayName,
+			Region:           strings.Replace(location.RegionName, "Region", "REGION", 1),
+			Province:         " " + location.ProvinceName + " ",
+			CityMunicipality: strings.Replace(location.CityName, "City", "CITY", 1),
+			Barangay:         strings.Replace(location.BarangayName, ". ", " ", 1),
 			ContactNo:        "09179990001",
 			MonthMM:          "05",
 			DayDD:            "06",
@@ -339,6 +339,9 @@ func TestWorkflowSmoke(t *testing.T) {
 	}
 	if repeatCommit.ImportID != csvResume.ImportID {
 		t.Fatalf("expected idempotent csv commit to reuse import id")
+	}
+	if err := assertCanonicalCSVImportLocations(ctx, repo, location); err != nil {
+		t.Fatalf("verify canonical csv import locations: %v", err)
 	}
 
 	pkgPath := filepath.Join(tempDir, "workflow-smoke-package.zip")
@@ -859,6 +862,38 @@ func listAllBeneficiaries(ctx context.Context, repo *repository.Repository, incl
 		}
 	}
 	return items, nil
+}
+
+func assertCanonicalCSVImportLocations(ctx context.Context, repo *repository.Repository, location smokeLocation) error {
+	beneficiaries, err := listAllBeneficiaries(ctx, repo, false)
+	if err != nil {
+		return err
+	}
+
+	csvImported := make([]model.Beneficiary, 0, 2)
+	for _, item := range beneficiaries {
+		if item.SourceType != model.BeneficiarySourceImport || item.SourceReference == nil {
+			continue
+		}
+		sourceRef := strings.TrimSpace(*item.SourceReference)
+		if strings.HasPrefix(sourceRef, "workflow-smoke-csv#row=") {
+			csvImported = append(csvImported, item)
+		}
+	}
+	if len(csvImported) != 2 {
+		return fmt.Errorf("expected 2 csv-imported beneficiaries, got %d", len(csvImported))
+	}
+
+	for _, item := range csvImported {
+		if item.RegionCode != location.RegionCode || item.ProvinceCode != location.ProvinceCode || item.CityCode != location.CityCode || item.BarangayCode != location.BarangayCode {
+			return fmt.Errorf("non-canonical PSGC codes for %s: region=%s province=%s city=%s barangay=%s", item.InternalUUID, item.RegionCode, item.ProvinceCode, item.CityCode, item.BarangayCode)
+		}
+		if item.RegionName != location.RegionName || item.ProvinceName != location.ProvinceName || item.CityName != location.CityName || item.BarangayName != location.BarangayName {
+			return fmt.Errorf("non-canonical PSGC names for %s: region=%q province=%q city=%q barangay=%q", item.InternalUUID, item.RegionName, item.ProvinceName, item.CityName, item.BarangayName)
+		}
+	}
+
+	return nil
 }
 
 func smokeID(prefix string) string {

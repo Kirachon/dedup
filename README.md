@@ -44,6 +44,18 @@ That template uses the operator-facing matching layout:
 The `id` field can be left blank on import if you want the system to
 auto-generate one.
 
+## Import Normalization (PSGC-Backed)
+
+The importer accepts common messy location text in the public template
+(`region`, `province`, `city_municipality`, `barangay`) and resolves it to
+canonical PSGC code/name values before saving records.
+
+- Exact PSGC matches are applied immediately.
+- Fuzzy matching is only auto-applied when confidence is high and the full
+  region-province-city-barangay chain resolves consistently.
+- Ambiguous or low-confidence rows are not auto-fixed; they are flagged for
+  review so partial chain drift is never written.
+
 ## Beginner Setup
 
 ### 1. Clone the repository
@@ -87,6 +99,16 @@ On first launch, the app will:
 The default database is stored under your Windows user profile, usually at:
 
 - `%AppData%\beneficiary-app\beneficiary.db`
+
+### 5. Optional location cleanup for existing records (Backfill)
+
+If older records already contain vague or wrong location labels, run the
+location normalization backfill from the maintenance flow:
+
+- `Dry-run` records what would change without modifying beneficiaries.
+- `Apply` updates location fields only when the full PSGC hierarchy resolves
+  uniquely.
+- Incomplete or ambiguous chains stay in review and are not partially rewritten.
 
 ## Packaging a Release
 
@@ -162,7 +184,8 @@ restore the quarantined file, add the exclusion, and run the command again.
 5. Use **Dedup** to review possible duplicates.
 6. Use **Import** to bring in CSV or exchange packages.
 7. Use **Export** to generate cleaned CSV output.
-8. Use **Backup** before any risky data change.
+8. Use location backfill (start with dry-run) for legacy location cleanup.
+9. Use **Backup** before any risky data change.
 
 ## Project Layout
 
@@ -183,3 +206,5 @@ restore the quarantined file, add the exclusion, and run the command again.
 - See `build/README.md` for packaging and artifact layout details.
 - See `docs/release/README.md` for release handoff notes.
 - See `offline_beneficiary_tool_plan.md` for the implementation plan.
+- The Rust Cleanlist repository is used as a parity oracle for normalization
+  behavior only and is not a runtime dependency of this app.

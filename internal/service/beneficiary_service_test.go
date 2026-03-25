@@ -204,6 +204,40 @@ func TestBuildDuplicatePrecheckPromptReturnsExactDuplicate(t *testing.T) {
 	}
 }
 
+func TestBuildDuplicatePrecheckPromptUsesPSGCCodesNotRawLocationLabels(t *testing.T) {
+	t.Parallel()
+
+	svc, _, cleanup := newTestService(t)
+	defer cleanup()
+
+	canonical := sampleDraft("Kappa", "Kara")
+	_, err := svc.CreateBeneficiary(context.Background(), canonical, CreateOptions{})
+	if err != nil {
+		t.Fatalf("seed canonical beneficiary: %v", err)
+	}
+
+	noisyLabels := canonical
+	noisyLabels.RegionName = "Region One -- noisy label"
+	noisyLabels.ProvinceName = "Province One (variant text)"
+	noisyLabels.CityName = "City One ???"
+	noisyLabels.BarangayName = "Barangay One [alias]"
+
+	prompt, err := svc.BuildDuplicatePrecheckPrompt(context.Background(), noisyLabels, "")
+	if err != nil {
+		t.Fatalf("build duplicate precheck prompt with noisy location labels: %v", err)
+	}
+
+	if !prompt.HasExactDuplicate || len(prompt.ExactDuplicates) != 1 {
+		t.Fatalf("expected exact duplicate with matching PSGC codes despite noisy labels, got %+v", prompt)
+	}
+	if prompt.Lookup.RegionCode != canonical.RegionCode ||
+		prompt.Lookup.ProvinceCode != canonical.ProvinceCode ||
+		prompt.Lookup.CityCode != canonical.CityCode ||
+		prompt.Lookup.BarangayCode != canonical.BarangayCode {
+		t.Fatalf("expected lookup to use canonical PSGC codes, got %+v", prompt.Lookup)
+	}
+}
+
 func newTestService(t *testing.T, opts ...Option) (*BeneficiaryService, *repository.Repository, func()) {
 	t.Helper()
 

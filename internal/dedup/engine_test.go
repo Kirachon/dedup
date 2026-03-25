@@ -107,6 +107,46 @@ func TestEngineCandidateBlocking(t *testing.T) {
 	}
 }
 
+func TestEngineBlockingAndMatchingIgnoreRawLocationLabels(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine()
+	canonical := []model.Beneficiary{
+		beneficiaryFixture("uuid-a", "SMITH", "JOHN", "M", "", "010101001", "1990-01-01", model.RecordStatusActive),
+		beneficiaryFixture("uuid-b", "SMITH", "JOHN", "M", "", "010101001", "1990-01-01", model.RecordStatusActive),
+	}
+
+	noisy := []model.Beneficiary{canonical[0], canonical[1]}
+	noisy[0].RegionName = "REG!ON ???"
+	noisy[0].ProvinceName = "PR0V!NCE ###"
+	noisy[0].CityName = "C!TY @@@"
+	noisy[0].BarangayName = "B4RANGAY ***"
+	noisy[1].RegionName = "RANDOM REGION LABEL"
+	noisy[1].ProvinceName = "RANDOM PROVINCE LABEL"
+	noisy[1].CityName = "RANDOM CITY LABEL"
+	noisy[1].BarangayName = "RANDOM BARANGAY LABEL"
+
+	request := RunRequest{RunID: "run-location-label-noise", Threshold: 90}
+	canonicalResult, err := engine.Run(request, canonical)
+	if err != nil {
+		t.Fatalf("run canonical data: %v", err)
+	}
+	noisyResult, err := engine.Run(request, noisy)
+	if err != nil {
+		t.Fatalf("run noisy labels data: %v", err)
+	}
+
+	if canonicalResult.TotalCandidates == 0 {
+		t.Fatalf("expected canonical test data to generate candidates")
+	}
+	if len(canonicalResult.Matches) == 0 {
+		t.Fatalf("expected canonical test data to generate at least one match")
+	}
+	if !reflect.DeepEqual(canonicalResult, noisyResult) {
+		t.Fatalf("expected identical dedup result when only raw location labels change, canonical=%+v noisy=%+v", canonicalResult, noisyResult)
+	}
+}
+
 func TestEngineCompareStates(t *testing.T) {
 	t.Parallel()
 

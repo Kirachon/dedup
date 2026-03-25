@@ -54,6 +54,13 @@ func TestImporterPreviewCommitResumeCSV(t *testing.T) {
 	if preview.RowCountTotal != 2 || preview.RowCountValid != 2 || preview.RowCountInvalid != 0 {
 		t.Fatalf("unexpected preview counts: %+v", preview)
 	}
+	previewToken, err := decodeImportToken(preview.PreviewToken)
+	if err != nil {
+		t.Fatalf("decode preview token: %v", err)
+	}
+	if strings.TrimSpace(previewToken.NormalizationVersion) == "" || strings.TrimSpace(previewToken.NormalizationHash) == "" {
+		t.Fatalf("expected normalization metadata in preview token: %+v", previewToken)
+	}
 
 	firstCommit, err := imp.Commit(ctx, preview.PreviewToken, "idem-csv-1")
 	if err != nil {
@@ -67,6 +74,13 @@ func TestImporterPreviewCommitResumeCSV(t *testing.T) {
 	}
 	if firstCommit.RowsInserted != 1 || firstCommit.RowsRead != 1 {
 		t.Fatalf("unexpected partial commit counts: %+v", firstCommit)
+	}
+	checkpointToken, err := decodeImportToken(*firstCommit.CheckpointToken)
+	if err != nil {
+		t.Fatalf("decode checkpoint token: %v", err)
+	}
+	if checkpointToken.NormalizationVersion != previewToken.NormalizationVersion || checkpointToken.NormalizationHash != previewToken.NormalizationHash {
+		t.Fatalf("expected checkpoint normalization metadata to match preview token")
 	}
 
 	resumer, err := NewImporter(repo, creator, WithClock(func() time.Time { return fixed.Add(5 * time.Minute) }))
@@ -105,6 +119,24 @@ func TestImporterPreviewCommitResumeCSV(t *testing.T) {
 	}
 	if len(page.Items) != 2 {
 		t.Fatalf("expected 2 beneficiaries, got %d", len(page.Items))
+	}
+
+	normRuns, err := repo.ListLocationNormalizationRuns(ctx, repository.LocationNormalizationRunListQuery{ImportID: resumed.ImportID, Limit: 5})
+	if err != nil {
+		t.Fatalf("list location normalization runs: %v", err)
+	}
+	if len(normRuns) != 1 {
+		t.Fatalf("expected one normalization run, got %d", len(normRuns))
+	}
+	if normRuns[0].Status != "COMPLETED" || normRuns[0].NormalizationVersion != previewToken.NormalizationVersion {
+		t.Fatalf("unexpected normalization run state: %+v", normRuns[0])
+	}
+	normItems, err := repo.ListLocationNormalizationItems(ctx, repository.LocationNormalizationItemListQuery{RunID: normRuns[0].RunID, Limit: 10})
+	if err != nil {
+		t.Fatalf("list location normalization items: %v", err)
+	}
+	if len(normItems) != 2 {
+		t.Fatalf("expected 2 normalization lineage items, got %d", len(normItems))
 	}
 }
 
@@ -160,6 +192,147 @@ func TestImporterPreviewAndCommitExchangePackage(t *testing.T) {
 	}
 	if len(page.Items) != 1 {
 		t.Fatalf("expected 1 beneficiary from package import, got %d", len(page.Items))
+	}
+}
+
+func TestImporterQuarantinesReviewNeededLocationRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixed := time.Date(2026, time.March, 25, 19, 0, 0, 0, time.UTC)
+	imp, repo, _, handle, cleanup := newImporterTestFixture(t, WithClock(func() time.Time { return fixed }))
+	defer cleanup()
+
+	seedImporterPSGC(t, handle.DB)
+	csvPath := writeBeneficiaryCSVFixture(t, []beneficiaryCSVRow{
+		{
+			ID: "",
+			LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "",
+			Region: "Region Unknown", Province: "Province Unknown", CityMunicipality: "City Unknown", Barangay: "Barangay Unknown",
+			ContactNo: "09170000001", MonthMM: "01", DayDD: "02", YearYYYY: "1980", Sex: "F",
+		},
+	})
+
+	preview, err := imp.Preview(ctx, Source{
+		Type:            model.ImportSourceCSV,
+		Path:            csvPath,
+		OperatorName:    "operator-c",
+		SourceReference: "csv-review-fixture",
+	})
+	if err != nil {
+		t.Fatalf("preview csv with review-needed row: %v", err)
+	}
+	if preview.RowCountTotal != 1 || preview.RowCountValid != 0 || preview.RowCountInvalid != 1 {
+		t.Fatalf("unexpected preview counts for review-needed row: %+v", preview)
+	}
+	if len(preview.SampleErrors) == 0 || !strings.Contains(strings.ToLower(preview.SampleErrors[0]), "review required") {
+		t.Fatalf("expected review-needed sample error, got %+v", preview.SampleErrors)
+	}
+
+	result, err := imp.Commit(ctx, preview.PreviewToken, "idem-csv-review-1")
+	if err != nil {
+		t.Fatalf("commit csv with review-needed row: %v", err)
+	}
+	if result.Status != importStatusSucceeded {
+		t.Fatalf("expected succeeded status, got %s", result.Status)
+	}
+	if result.RowsRead != 1 || result.RowsInserted != 0 || result.RowsSkipped != 1 || result.RowsFailed != 0 {
+		t.Fatalf("unexpected commit counts for review-needed row: %+v", result)
+	}
+
+	page, err := repo.ListBeneficiaries(ctx, repository.BeneficiaryListQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list beneficiaries: %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("expected no inserted beneficiaries for review-needed import, got %d", len(page.Items))
+	}
+
+	runs, err := repo.ListLocationNormalizationRuns(ctx, repository.LocationNormalizationRunListQuery{ImportID: result.ImportID, Limit: 5})
+	if err != nil {
+		t.Fatalf("list normalization runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one normalization run for review-needed import, got %d", len(runs))
+	}
+	if runs[0].ReviewRows != 1 || runs[0].AutoAppliedRows != 0 {
+		t.Fatalf("unexpected normalization run counters: %+v", runs[0])
+	}
+
+	items, err := repo.ListLocationNormalizationItems(ctx, repository.LocationNormalizationItemListQuery{RunID: runs[0].RunID, Limit: 10})
+	if err != nil {
+		t.Fatalf("list normalization items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one normalization item, got %d", len(items))
+	}
+	if !items[0].NeedsReview || items[0].Status != model.LocationNormalizationStatusReviewNeeded {
+		t.Fatalf("expected review-needed normalization lineage item, got %+v", items[0])
+	}
+}
+
+func TestImporterResumeRejectsNormalizationMetadataMismatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixed := time.Date(2026, time.March, 25, 19, 30, 0, 0, time.UTC)
+	imp, _, creator, handle, cleanup := newImporterTestFixture(t, WithClock(func() time.Time { return fixed }), WithCommitRowBudget(1))
+	defer cleanup()
+
+	seedImporterPSGC(t, handle.DB)
+	csvPath := writeBeneficiaryCSVFixture(t, []beneficiaryCSVRow{
+		{
+			ID: "",
+			LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "",
+			Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One",
+			ContactNo: "09170000001", MonthMM: "01", DayDD: "02", YearYYYY: "1980", Sex: "F",
+		},
+		{
+			ID: "",
+			LastName: "Santos", FirstName: "Ben", MiddleName: "T", ExtensionName: "",
+			Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One",
+			ContactNo: "09170000002", MonthMM: "03", DayDD: "04", YearYYYY: "1979", Sex: "M",
+		},
+	})
+
+	preview, err := imp.Preview(ctx, Source{
+		Type:            model.ImportSourceCSV,
+		Path:            csvPath,
+		OperatorName:    "operator-d",
+		SourceReference: "csv-metadata-mismatch",
+	})
+	if err != nil {
+		t.Fatalf("preview csv: %v", err)
+	}
+	firstCommit, err := imp.Commit(ctx, preview.PreviewToken, "idem-csv-metadata-mismatch")
+	if err != nil {
+		t.Fatalf("commit csv: %v", err)
+	}
+	if firstCommit.CheckpointToken == nil || *firstCommit.CheckpointToken == "" {
+		t.Fatalf("expected checkpoint token from partial commit")
+	}
+
+	checkpoint, err := decodeImportToken(*firstCommit.CheckpointToken)
+	if err != nil {
+		t.Fatalf("decode checkpoint token: %v", err)
+	}
+	checkpoint.NormalizationHash = strings.Repeat("a", len(checkpoint.NormalizationHash))
+	invalidCheckpoint, err := encodeImportToken(checkpoint)
+	if err != nil {
+		t.Fatalf("encode checkpoint token: %v", err)
+	}
+
+	repo, err := repository.New(handle.DB, handle.Writer)
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	resumer, err := NewImporter(repo, creator, WithClock(func() time.Time { return fixed.Add(1 * time.Minute) }))
+	if err != nil {
+		t.Fatalf("new resumer: %v", err)
+	}
+	_, err = resumer.Resume(ctx, invalidCheckpoint)
+	if err == nil || !strings.Contains(err.Error(), "normalization metadata mismatch") {
+		t.Fatalf("expected normalization metadata mismatch error, got %v", err)
 	}
 }
 
