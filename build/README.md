@@ -9,11 +9,14 @@ Builds `cmd/beneficiary-app` to `build/bin/beneficiary-app.exe` by default.
 Uses reproducibility-friendly flags:
 `-trimpath`, `-buildvcs=false`, and `-mod=readonly`.
 Also supports isolated Go temp/cache paths via `-GoCache` and `-TempRoot`.
+Copies the PSGC CSV file next to the built executable so the app can start
+from the build output directory.
 
 2. `build/package.ps1`
 Builds (unless `-SkipBuild` is used), then assembles a portable release folder under `build/releases/`.
 Release payload includes:
 - `beneficiary-app.exe`
+- `lib_geo_map_2025_202603251312.csv`
 - `THIRD_PARTY_NOTICES.md`
 - `manifest.json`
 - `checksums.sha256`
@@ -26,6 +29,12 @@ Build executable:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
+```
+
+Run the app from source:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run.ps1
 ```
 
 Create a release package:
@@ -54,10 +63,17 @@ powershell -ExecutionPolicy Bypass -File scripts/test.ps1 -AllowKnownWindowsExeL
 
 The fallback path runs full tests first, then if it detects the specific Windows `Access is denied` lock for `internal/app.test.exe` or `internal/ui.test.exe`, it re-runs tests excluding those two packages and adds a compile check for `internal/app` and `internal/ui`.
 
+Validate formatting and tests in one pass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
+```
+
 ## Artifact Layout Example
 
 `build/releases/offline-beneficiary-tool-win64-0.1.0/`
 - `beneficiary-app.exe`
+- `lib_geo_map_2025_202603251312.csv`
 - `THIRD_PARTY_NOTICES.md`
 - `manifest.json`
 - `checksums.sha256`
