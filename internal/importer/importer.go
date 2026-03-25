@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
@@ -148,6 +149,9 @@ func (i *Importer) Preview(ctx context.Context, source Source) (*PreviewReport, 
 	stats, sampleErrors, err := i.scanSource(ctx, doc, 0, false)
 	if err != nil {
 		return nil, err
+	}
+	if doc.PackageManifest != nil && doc.PackageManifest.RowsDeclared != stats.Total {
+		return nil, fmt.Errorf("package row count mismatch: manifest declared %d rows, source contains %d", doc.PackageManifest.RowsDeclared, stats.Total)
 	}
 
 	token, err := encodeImportToken(ImportToken{
@@ -409,6 +413,9 @@ func loadPackageDocument(source Source) (sourceDocument, error) {
 	}
 	if strings.TrimSpace(manifest.ChecksumAlgorithm) != "sha256" {
 		return sourceDocument{}, fmt.Errorf("unsupported package checksum algorithm: %s", manifest.ChecksumAlgorithm)
+	}
+	if manifest.RowsDeclared < 0 {
+		return sourceDocument{}, fmt.Errorf("manifest rows_declared must be >= 0")
 	}
 
 	checksums, err := parseChecksumList(files[packageChecksumsFileName])
@@ -752,17 +759,14 @@ func (i *Importer) updateImportLog(ctx context.Context, log *model.ImportLog) er
 }
 
 func (i *Importer) getImportLogByID(ctx context.Context, importID string) (*model.ImportLog, error) {
-	logs, err := i.repo.ListImportLogs(ctx, repository.ImportLogListQuery{Limit: 500})
+	log, err := i.repo.GetImportLog(ctx, importID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	for idx := range logs {
-		if logs[idx].ImportID == importID {
-			item := logs[idx]
-			return &item, nil
-		}
-	}
-	return nil, nil
+	return log, nil
 }
 
 func (i *Importer) findExistingImport(ctx context.Context, sourceHash, idempotencyKey string) (*model.ImportLog, error) {
@@ -946,12 +950,21 @@ func parseChecksumList(body []byte) (map[string]string, error) {
 
 func verifyPackageChecksums(expected map[string]string, files map[string][]byte) error {
 	for name, body := range files {
-		if filepath.ToSlash(name) == packageChecksumsFileName {
+		name = filepath.ToSlash(name)
+		switch {
+		case name == packageChecksumsFileName:
 			continue
+		case name == packageManifestFileName || name == packageBeneficiariesName || name == packageExportMetaFileName:
+			// core files must be validated
+		case name == "README.txt" || strings.HasPrefix(name, "attachments/"):
+			// v1 optional files are intentionally ignored by the core importer
+			continue
+		default:
+			return fmt.Errorf("unexpected file in package: %s", name)
 		}
 		sum := sha256.Sum256(body)
 		got := hex.EncodeToString(sum[:])
-		if expected[filepath.ToSlash(name)] != got {
+		if expected[name] != got {
 			return fmt.Errorf("checksum mismatch for %s", name)
 		}
 	}

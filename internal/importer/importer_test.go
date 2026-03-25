@@ -312,6 +312,7 @@ func writeExchangePackageFixture(t *testing.T, rows []beneficiaryCSVRow) string 
 	writeZipEntry(packageBeneficiariesName, csvBody)
 	writeZipEntry(packageChecksumsFileName, checksumBody)
 	writeZipEntry(packageExportMetaFileName, exportMetaBody)
+	writeZipEntry("attachments/notes.txt", []byte("optional attachment"))
 	if err := zw.Close(); err != nil {
 		t.Fatalf("close zip writer: %v", err)
 	}
