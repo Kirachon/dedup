@@ -14,6 +14,8 @@ Set-StrictMode -Version Latest
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
+$psgcCsvName = "lib_geo_map_2025_202603251312.csv"
+$psgcCsvSource = Join-Path $root $psgcCsvName
 
 function Resolve-AbsolutePath {
     param(
@@ -76,8 +78,14 @@ New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 
 $binaryReleasePath = Join-Path $releaseDir "beneficiary-app.exe"
 $noticesReleasePath = Join-Path $releaseDir "THIRD_PARTY_NOTICES.md"
+$psgcCsvReleasePath = Join-Path $releaseDir $psgcCsvName
 Copy-Item -Path $binaryAbsolutePath -Destination $binaryReleasePath -Force
 Copy-Item -Path $noticesAbsolutePath -Destination $noticesReleasePath -Force
+if (Test-Path $psgcCsvSource) {
+    Copy-Item -Path $psgcCsvSource -Destination $psgcCsvReleasePath -Force
+} else {
+    throw "PSGC CSV not found at $psgcCsvSource"
+}
 
 $manifestPath = Join-Path $releaseDir "manifest.json"
 $shaSumsPath = Join-Path $releaseDir "checksums.sha256"

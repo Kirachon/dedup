@@ -13,6 +13,8 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
+$psgcCsvName = "lib_geo_map_2025_202603251312.csv"
+$psgcCsvSource = Join-Path $root $psgcCsvName
 
 if ([System.IO.Path]::IsPathRooted($Output)) {
     $outputPath = [System.IO.Path]::GetFullPath($Output)
@@ -162,6 +164,14 @@ try {
 
     Write-Host "Build completed."
     Write-Host "Output: $outputPath"
+
+    if (Test-Path $psgcCsvSource) {
+        $psgcCsvDestination = Join-Path $outDir $psgcCsvName
+        Copy-Item -Path $psgcCsvSource -Destination $psgcCsvDestination -Force
+        Write-Host "PSGC CSV copied to: $psgcCsvDestination"
+    } else {
+        throw "PSGC CSV not found at $psgcCsvSource"
+    }
 } finally {
     if ($null -ne $previousGoCache) {
         $env:GOCACHE = $previousGoCache
