@@ -27,3 +27,4 @@ Before deployment, validate:
 1. `INSTALL.md` - clean-machine install and first-run verification
 2. `RELEASE_CHECKLIST.md` - release gate checklist for deployment readiness
 3. `RELEASE_NOTES_v0.1.0.md` - versioned summary for the first packaged release
+4. `RELEASE_NOTES_v0.2.0.md` - versioned summary for the PSGC normalization reuse release
