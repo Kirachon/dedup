@@ -26,6 +26,9 @@ coverage.out
 *.temp
 .gocache/
 .tmp/
+build/.gocache/
+build/.gotmp/
+build/releases/
 
 # OS/editor clutter
 .DS_Store
