@@ -311,9 +311,11 @@ func buildImportScreen(runtime *Runtime) fyne.CanvasObject {
 	))
 
 	pageHeader := SectionHeader("Import Data", "Import beneficiary records from CSV or exchange package")
+	templateNote := widget.NewLabel("CSV template bundled with the app: beneficiary_import_template.csv")
 
 	return container.NewVScroll(container.NewVBox(
 		pageHeader,
+		templateNote,
 		optionsCard,
 		historyCard,
 	))

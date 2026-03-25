@@ -11,6 +11,7 @@ $goFiles = @(
     "internal/config/config.go",
     "internal/service/backup_service.go",
     "internal/ui/app.go",
+    "internal/ui/import_screen.go",
     "internal/workflowsmoke/smoke_test.go"
 )
 

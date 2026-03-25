@@ -11,12 +11,15 @@ Uses reproducibility-friendly flags:
 Also supports isolated Go temp/cache paths via `-GoCache` and `-TempRoot`.
 Copies the PSGC CSV file next to the built executable so the app can start
 from the build output directory.
+Copies the import template CSV next to the built executable so operators have
+a bundled example import file.
 
 2. `build/package.ps1`
 Builds (unless `-SkipBuild` is used), then assembles a portable release folder under `build/releases/`.
 Release payload includes:
 - `beneficiary-app.exe`
 - `lib_geo_map_2025_202603251312.csv`
+- `beneficiary_import_template.csv`
 - `THIRD_PARTY_NOTICES.md`
 - `manifest.json`
 - `checksums.sha256`
@@ -74,6 +77,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
 `build/releases/offline-beneficiary-tool-win64-0.1.0/`
 - `beneficiary-app.exe`
 - `lib_geo_map_2025_202603251312.csv`
+- `beneficiary_import_template.csv`
 - `THIRD_PARTY_NOTICES.md`
 - `manifest.json`
 - `checksums.sha256`

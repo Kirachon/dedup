@@ -14,7 +14,9 @@ $PSNativeCommandUseErrorActionPreference = $false
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 $psgcCsvName = "lib_geo_map_2025_202603251312.csv"
+$templateCsvName = "beneficiary_import_template.csv"
 $psgcCsvSource = Join-Path $root $psgcCsvName
+$templateCsvSource = Join-Path $root $templateCsvName
 
 if ([System.IO.Path]::IsPathRooted($Output)) {
     $outputPath = [System.IO.Path]::GetFullPath($Output)
@@ -171,6 +173,14 @@ try {
         Write-Host "PSGC CSV copied to: $psgcCsvDestination"
     } else {
         throw "PSGC CSV not found at $psgcCsvSource"
+    }
+
+    if (Test-Path $templateCsvSource) {
+        $templateCsvDestination = Join-Path $outDir $templateCsvName
+        Copy-Item -Path $templateCsvSource -Destination $templateCsvDestination -Force
+        Write-Host "Import template copied to: $templateCsvDestination"
+    } else {
+        throw "Import template CSV not found at $templateCsvSource"
     }
 } finally {
     if ($null -ne $previousGoCache) {

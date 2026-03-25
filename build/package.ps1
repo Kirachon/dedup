@@ -15,7 +15,9 @@ Set-StrictMode -Version Latest
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 $psgcCsvName = "lib_geo_map_2025_202603251312.csv"
+$templateCsvName = "beneficiary_import_template.csv"
 $psgcCsvSource = Join-Path $root $psgcCsvName
+$templateCsvSource = Join-Path $root $templateCsvName
 
 function Resolve-AbsolutePath {
     param(
@@ -79,12 +81,18 @@ New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 $binaryReleasePath = Join-Path $releaseDir "beneficiary-app.exe"
 $noticesReleasePath = Join-Path $releaseDir "THIRD_PARTY_NOTICES.md"
 $psgcCsvReleasePath = Join-Path $releaseDir $psgcCsvName
+$templateCsvReleasePath = Join-Path $releaseDir $templateCsvName
 Copy-Item -Path $binaryAbsolutePath -Destination $binaryReleasePath -Force
 Copy-Item -Path $noticesAbsolutePath -Destination $noticesReleasePath -Force
 if (Test-Path $psgcCsvSource) {
     Copy-Item -Path $psgcCsvSource -Destination $psgcCsvReleasePath -Force
 } else {
     throw "PSGC CSV not found at $psgcCsvSource"
+}
+if (Test-Path $templateCsvSource) {
+    Copy-Item -Path $templateCsvSource -Destination $templateCsvReleasePath -Force
+} else {
+    throw "Import template CSV not found at $templateCsvSource"
 }
 
 $manifestPath = Join-Path $releaseDir "manifest.json"

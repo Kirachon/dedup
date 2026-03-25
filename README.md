@@ -20,6 +20,10 @@ The repository already includes the PSGC CSV file used by the app:
 
 - `lib_geo_map_2025_202603251312.csv`
 
+The repository also includes the CSV import template bundled with the app:
+
+- `beneficiary_import_template.csv`
+
 ## Beginner Setup
 
 ### 1. Clone the repository
@@ -33,6 +37,9 @@ cd dedup
 
 The app loads PSGC data from `lib_geo_map_2025_202603251312.csv`.
 Keep that file in the repository root when running from source.
+
+Use `beneficiary_import_template.csv` as the starting point for CSV imports.
+The packaged release copies it next to the executable.
 
 If you move it, set the environment variable `BENEFICIARY_APP_PSGC_CSV`
 to the new path.
@@ -73,6 +80,7 @@ It includes:
 
 - `beneficiary-app.exe`
 - `lib_geo_map_2025_202603251312.csv`
+- `beneficiary_import_template.csv`
 - `THIRD_PARTY_NOTICES.md`
 - `manifest.json`
 - `checksums.sha256`
