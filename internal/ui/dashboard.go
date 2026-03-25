@@ -83,10 +83,7 @@ func buildDashboard(runtime *Runtime) fyne.CanvasObject {
 	)
 
 	activityHeaders := []string{"BENEFICIARY", "ID NUMBER", "DATE ENCODED", "STATUS"}
-	activityPlaceholder := DataTable(activityHeaders, [][]string{
-		{"Loading...", "", "", ""},
-	})
-	activityWrapper := container.NewStack(activityPlaceholder)
+	activityWrapper := container.NewStack(DataTable(activityHeaders, nil))
 
 	refreshActivity := func(runtime *Runtime) {
 		audits, err := runtime.Repository.ListAuditLogs(context.Background(), repository.AuditLogQuery{Limit: 5})
@@ -102,9 +99,6 @@ func buildDashboard(runtime *Runtime) fyne.CanvasObject {
 				ts,
 				a.Action,
 			})
-		}
-		if len(rows) == 0 {
-			rows = [][]string{{"No records yet", "", "", ""}}
 		}
 		fyne.Do(func() {
 			activityWrapper.Objects = []fyne.CanvasObject{DataTable(activityHeaders, rows)}

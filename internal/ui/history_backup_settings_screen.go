@@ -43,7 +43,7 @@ func buildHistoryScreen(runtime *Runtime) fyne.CanvasObject {
 	detailView := widget.NewMultiLineEntry()
 	detailView.Wrapping = fyne.TextWrapWord
 	detailView.Disable()
-	detailView.SetPlaceHolder("select a history item to view details")
+	detailView.SetPlaceHolder("Select a history item to view details")
 
 	setDetails := func(text string) {
 		fyne.Do(func() {
@@ -58,7 +58,7 @@ func buildHistoryScreen(runtime *Runtime) fyne.CanvasObject {
 			return len(importLogs)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("import-history")
+			return widget.NewLabel("")
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label, ok := item.(*widget.Label)
@@ -82,7 +82,7 @@ func buildHistoryScreen(runtime *Runtime) fyne.CanvasObject {
 			return len(exportLogs)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("export-history")
+			return widget.NewLabel("")
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label, ok := item.(*widget.Label)
@@ -106,7 +106,7 @@ func buildHistoryScreen(runtime *Runtime) fyne.CanvasObject {
 			return len(auditLogs)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("audit-history")
+			return widget.NewLabel("")
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label, ok := item.(*widget.Label)
@@ -276,7 +276,7 @@ func buildSettingsScreen(runtime *Runtime) fyne.CanvasObject {
 	metadataView := widget.NewMultiLineEntry()
 	metadataView.Wrapping = fyne.TextWrapWord
 	metadataView.Disable()
-	metadataView.SetPlaceHolder("PSGC ingest metadata")
+	metadataView.SetPlaceHolder("PSGC ingest metadata will appear here")
 
 	settingsList := widget.NewList(
 		func() int {
@@ -303,9 +303,9 @@ func buildSettingsScreen(runtime *Runtime) fyne.CanvasObject {
 	)
 
 	settingKey := widget.NewEntry()
-	settingKey.SetPlaceHolder("setting key")
+	settingKey.SetPlaceHolder("Setting key")
 	settingValue := widget.NewEntry()
-	settingValue.SetPlaceHolder("setting value")
+	settingValue.SetPlaceHolder("Setting value")
 
 	settingsResult := widget.NewLabel("")
 
@@ -409,20 +409,34 @@ func buildSettingsScreen(runtime *Runtime) fyne.CanvasObject {
 	refreshBtn := widget.NewButton("Refresh", refreshSettings)
 	refreshSettings()
 
-	return container.NewVBox(
-		widget.NewLabelWithStyle("Runtime Information", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		runtimeInfo,
-		widget.NewLabelWithStyle("PSGC Ingest Metadata", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		metadataView,
+	runtimeCard := Card(container.NewVBox(
+		SectionHeader("LGU Profile & Runtime Information", ""),
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Application Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		runtimeInfo,
+		widget.NewSeparator(),
+		SectionHeader("PSGC Ingest Metadata", ""),
+		metadataView,
+	))
+
+	settingsCard := Card(container.NewVBox(
+		SectionHeader("Application Settings", "Configure application-level key-value settings"),
+		widget.NewSeparator(),
 		widget.NewForm(
 			widget.NewFormItem("Key", settingKey),
 			widget.NewFormItem("Value", settingValue),
 		),
 		container.NewHBox(saveBtn, refreshBtn, layout.NewSpacer(), settingsResult),
+		widget.NewSeparator(),
 		settingsList,
-	)
+	))
+
+	pageHeader := SectionHeader("System Settings", "Manage LGU profile and application configuration")
+
+	return container.NewVScroll(container.NewVBox(
+		pageHeader,
+		runtimeCard,
+		settingsCard,
+	))
 }
 
 func buildBackupScreen(runtime *Runtime) fyne.CanvasObject {
@@ -432,20 +446,20 @@ func buildBackupScreen(runtime *Runtime) fyne.CanvasObject {
 
 	snapshotDir := widget.NewEntry()
 	snapshotDir.SetText(filepath.Join(filepath.Dir(strings.TrimSpace(runtime.DBPath)), "backups"))
-	snapshotDir.SetPlaceHolder(`D:\path\to\backup\directory`)
+	snapshotDir.SetPlaceHolder(`e.g. D:\Backups`)
 
 	backupOperator := widget.NewEntry()
-	backupOperator.SetPlaceHolder("operator name")
+	backupOperator.SetPlaceHolder("Enter operator name")
 
 	snapshotPath := widget.NewEntry()
-	snapshotPath.SetPlaceHolder(`D:\path\to\snapshot.db`)
+	snapshotPath.SetPlaceHolder(`e.g. D:\Backups\snapshot.db`)
 
 	manifestPath := widget.NewEntry()
-	manifestPath.SetPlaceHolder(`D:\path\to\snapshot.db.manifest.json`)
+	manifestPath.SetPlaceHolder(`e.g. D:\Backups\snapshot.db.manifest.json`)
 
 	restoreConfirmation := widget.NewEntry()
 	restoreOperator := widget.NewEntry()
-	restoreOperator.SetPlaceHolder("operator name")
+	restoreOperator.SetPlaceHolder("Enter operator name")
 
 	expectedConfirmation := widget.NewLabel(runtime.BackupService.ExpectedRestoreConfirmation())
 	restoreConfirmation.SetText(runtime.BackupService.ExpectedRestoreConfirmation())
@@ -453,7 +467,7 @@ func buildBackupScreen(runtime *Runtime) fyne.CanvasObject {
 	backupResult := widget.NewMultiLineEntry()
 	backupResult.Wrapping = fyne.TextWrapWord
 	backupResult.Disable()
-	backupResult.SetPlaceHolder("backup/restore output")
+	backupResult.SetPlaceHolder("Backup and restore results will appear here")
 
 	setResult := func(text string) {
 		fyne.Do(func() {

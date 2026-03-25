@@ -134,6 +134,23 @@ func SectionHeader(title, subtitle string) fyne.CanvasObject {
 	return container.NewVBox(titleText, subText)
 }
 
+// SectionCard wraps a content block in a calm, elevated panel with a header.
+func SectionCard(title, subtitle string, content fyne.CanvasObject) fyne.CanvasObject {
+	if content == nil {
+		content = widget.NewLabel("")
+	}
+
+	body := container.NewVBox(
+		SectionHeader(title, subtitle),
+		widget.NewSeparator(),
+		content,
+	)
+
+	bg := canvas.NewRectangle(ColorSurfaceContainerLowest)
+	bg.CornerRadius = 12
+	return container.NewStack(bg, container.NewPadded(body))
+}
+
 // ─────────────────────────────────────────────
 // DataTable
 // ─────────────────────────────────────────────

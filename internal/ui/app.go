@@ -48,7 +48,7 @@ func Launch(ctx context.Context, deps *Dependencies) error {
 func buildShell(runtime *Runtime) fyne.CanvasObject {
 	registry := snapshotScreenRegistry()
 	if len(registry) == 0 {
-		return widget.NewLabel("No screens registered")
+		return widget.NewLabel("No application screens are available")
 	}
 
 	// Build initial screen content
@@ -99,7 +99,7 @@ func buildShell(runtime *Runtime) fyne.CanvasObject {
 	// Status footer inside sidebar
 	statusLabel := widget.NewLabelWithData(runtime.StatusMessage)
 
-	dbText := canvas.NewText(fmt.Sprintf("DB: %s", truncatePath(runtime.DBPath, 26)), ColorOnSurfaceVariant)
+	dbText := canvas.NewText(fmt.Sprintf("DB: %s", truncatePath(runtime.DBPath, 18)), ColorOnSurfaceVariant)
 	dbText.TextSize = 10
 
 	psgcText := canvas.NewText(psgcStatusSummary(runtime.PSGCReport), ColorOnSurfaceVariant)
@@ -113,11 +113,11 @@ func buildShell(runtime *Runtime) fyne.CanvasObject {
 	)
 
 	// Brand header
-	brandTitle := canvas.NewText(runtime.Config.WindowTitle, ColorPrimary)
-	brandTitle.TextSize = 14
+	brandTitle := canvas.NewText("Beneficiary Tool", ColorPrimary)
+	brandTitle.TextSize = 12
 	brandTitle.TextStyle = fyne.TextStyle{Bold: true}
 
-	brandSub := canvas.NewText("LGU Administrative Portal", ColorOnSurfaceVariant)
+	brandSub := canvas.NewText("LGU Portal", ColorOnSurfaceVariant)
 	brandSub.TextSize = 9
 
 	brandIconBg := canvas.NewRectangle(ColorPrimary)
@@ -150,9 +150,9 @@ func buildShell(runtime *Runtime) fyne.CanvasObject {
 		container.NewBorder(topBar, nil, nil, nil, container.NewPadded(contentArea)),
 	)
 
-	// Split sidebar (fixed 240px) + main content
+	// Split sidebar (compact) + main content
 	split := container.NewHSplit(sidebar, mainContent)
-	split.SetOffset(0.18) // ~240px of a 1360 wide window
+	split.SetOffset(0.14) // compact sidebar to keep the content area dominant
 
 	return split
 }

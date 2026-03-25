@@ -51,30 +51,528 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 		selectedUUID string
 	)
 
+	type psgcSelectionState struct {
+		RegionCode   string
+		RegionName   string
+		ProvinceCode string
+		ProvinceName string
+		CityCode     string
+		CityName     string
+		BarangayCode string
+		BarangayName string
+	}
+
+	psgcState := psgcSelectionState{}
+	var psgcUpdating bool
+
+	regionSelect := widget.NewSelect(nil, nil)
+	provinceSelect := widget.NewSelect(nil, nil)
+	citySelect := widget.NewSelect(nil, nil)
+	barangaySelect := widget.NewSelect(nil, nil)
+
+	regionCodeValue := widget.NewLabel("Code: —")
+	provinceCodeValue := widget.NewLabel("Code: —")
+	cityCodeValue := widget.NewLabel("Code: —")
+	barangayCodeValue := widget.NewLabel("Code: —")
+
+	regionNameValue := widget.NewLabel("Name: —")
+	provinceNameValue := widget.NewLabel("Name: —")
+	cityNameValue := widget.NewLabel("Name: —")
+	barangayNameValue := widget.NewLabel("Name: —")
+
+	var regions []model.PSGCRegion
+	var provinces []model.PSGCProvince
+	var cities []model.PSGCCity
+	var barangays []model.PSGCBarangay
+
+	psgcDisplay := func(code, name string) string {
+		code = strings.TrimSpace(code)
+		name = strings.TrimSpace(name)
+		switch {
+		case code == "" && name == "":
+			return ""
+		case name == "":
+			return code
+		case code == "":
+			return name
+		default:
+			return fmt.Sprintf("%s - %s", code, name)
+		}
+	}
+
+	psgcCodeFromDisplay := func(value string) string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return ""
+		}
+		code, _, found := strings.Cut(value, " - ")
+		if found {
+			return strings.TrimSpace(code)
+		}
+		return value
+	}
+
+	psgcNameFromDisplay := func(value string) string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return ""
+		}
+		if _, name, found := strings.Cut(value, " - "); found {
+			return strings.TrimSpace(name)
+		}
+		return value
+	}
+
+	regionOptionValues := func(items []model.PSGCRegion) []string {
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			values = append(values, psgcDisplay(item.RegionCode, item.RegionName))
+		}
+		return values
+	}
+
+	loadRegions := func() error {
+		items, err := runtime.Repository.ListRegions(context.Background())
+		if err != nil {
+			return err
+		}
+		regions = items
+		regionSelect.SetOptions(regionOptionValues(regions))
+		return nil
+	}
+
+	ensureRegionsLoaded := func() error {
+		if len(regions) > 0 {
+			return nil
+		}
+		return loadRegions()
+	}
+
+	provinceOptionValues := func(items []model.PSGCProvince) []string {
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			values = append(values, psgcDisplay(item.ProvinceCode, item.ProvinceName))
+		}
+		return values
+	}
+
+	cityOptionValues := func(items []model.PSGCCity) []string {
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			values = append(values, psgcDisplay(item.CityCode, item.CityName))
+		}
+		return values
+	}
+
+	barangayOptionValues := func(items []model.PSGCBarangay) []string {
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			values = append(values, psgcDisplay(item.BarangayCode, item.BarangayName))
+		}
+		return values
+	}
+
+	findRegionByCode := func(code string) (model.PSGCRegion, bool) {
+		code = strings.TrimSpace(code)
+		for _, item := range regions {
+			if item.RegionCode == code {
+				return item, true
+			}
+		}
+		return model.PSGCRegion{}, false
+	}
+
+	findRegionByName := func(name string) (model.PSGCRegion, bool) {
+		name = strings.TrimSpace(name)
+		for _, item := range regions {
+			if strings.EqualFold(strings.TrimSpace(item.RegionName), name) {
+				return item, true
+			}
+		}
+		return model.PSGCRegion{}, false
+	}
+
+	findProvinceByCode := func(code string) (model.PSGCProvince, bool) {
+		code = strings.TrimSpace(code)
+		for _, item := range provinces {
+			if item.ProvinceCode == code {
+				return item, true
+			}
+		}
+		return model.PSGCProvince{}, false
+	}
+
+	findProvinceByName := func(name string) (model.PSGCProvince, bool) {
+		name = strings.TrimSpace(name)
+		for _, item := range provinces {
+			if strings.EqualFold(strings.TrimSpace(item.ProvinceName), name) {
+				return item, true
+			}
+		}
+		return model.PSGCProvince{}, false
+	}
+
+	findCityByCode := func(code string) (model.PSGCCity, bool) {
+		code = strings.TrimSpace(code)
+		for _, item := range cities {
+			if item.CityCode == code {
+				return item, true
+			}
+		}
+		return model.PSGCCity{}, false
+	}
+
+	findCityByName := func(name string) (model.PSGCCity, bool) {
+		name = strings.TrimSpace(name)
+		for _, item := range cities {
+			if strings.EqualFold(strings.TrimSpace(item.CityName), name) {
+				return item, true
+			}
+		}
+		return model.PSGCCity{}, false
+	}
+
+	findBarangayByCode := func(code string) (model.PSGCBarangay, bool) {
+		code = strings.TrimSpace(code)
+		for _, item := range barangays {
+			if item.BarangayCode == code {
+				return item, true
+			}
+		}
+		return model.PSGCBarangay{}, false
+	}
+
+	findBarangayByName := func(name string) (model.PSGCBarangay, bool) {
+		name = strings.TrimSpace(name)
+		for _, item := range barangays {
+			if strings.EqualFold(strings.TrimSpace(item.BarangayName), name) {
+				return item, true
+			}
+		}
+		return model.PSGCBarangay{}, false
+	}
+
+	clearProvinceAndBelowSelections := func() {
+		provinces = nil
+		cities = nil
+		barangays = nil
+		provinceSelect.SetOptions(nil)
+		citySelect.SetOptions(nil)
+		barangaySelect.SetOptions(nil)
+		provinceSelect.SetSelected("")
+		citySelect.SetSelected("")
+		barangaySelect.SetSelected("")
+		provinceCodeValue.SetText("Code: —")
+		provinceNameValue.SetText("Name: —")
+		cityCodeValue.SetText("Code: —")
+		cityNameValue.SetText("Name: —")
+		barangayCodeValue.SetText("Code: —")
+		barangayNameValue.SetText("Name: —")
+		psgcState.ProvinceCode = ""
+		psgcState.ProvinceName = ""
+		psgcState.CityCode = ""
+		psgcState.CityName = ""
+		psgcState.BarangayCode = ""
+		psgcState.BarangayName = ""
+	}
+
+	resetProvinceSelection := func() {
+		psgcState.ProvinceCode = ""
+		psgcState.ProvinceName = ""
+		provinceSelect.SetSelected("")
+		provinceCodeValue.SetText("Code: —")
+		provinceNameValue.SetText("Name: —")
+		cities = nil
+		citySelect.SetOptions(nil)
+		citySelect.SetSelected("")
+		cityCodeValue.SetText("Code: —")
+		cityNameValue.SetText("Name: —")
+		barangays = nil
+		barangaySelect.SetOptions(nil)
+		barangaySelect.SetSelected("")
+		barangayCodeValue.SetText("Code: —")
+		barangayNameValue.SetText("Name: —")
+		psgcState.CityCode = ""
+		psgcState.CityName = ""
+		psgcState.BarangayCode = ""
+		psgcState.BarangayName = ""
+	}
+
+	resetCitySelection := func() {
+		psgcState.CityCode = ""
+		psgcState.CityName = ""
+		citySelect.SetSelected("")
+		cityCodeValue.SetText("Code: —")
+		cityNameValue.SetText("Name: —")
+		barangays = nil
+		barangaySelect.SetOptions(nil)
+		barangaySelect.SetSelected("")
+		barangayCodeValue.SetText("Code: —")
+		barangayNameValue.SetText("Name: —")
+		psgcState.BarangayCode = ""
+		psgcState.BarangayName = ""
+	}
+
+	resetBarangaySelection := func() {
+		psgcState.BarangayCode = ""
+		psgcState.BarangayName = ""
+		barangaySelect.SetSelected("")
+		barangayCodeValue.SetText("Code: —")
+		barangayNameValue.SetText("Name: —")
+	}
+
+	loadProvinces := func(regionCode string) error {
+		items, err := runtime.Repository.ListProvincesByRegion(context.Background(), regionCode)
+		if err != nil {
+			return err
+		}
+		provinces = items
+		provinceSelect.SetOptions(provinceOptionValues(provinces))
+		return nil
+	}
+
+	loadCities := func(provinceCode string) error {
+		items, err := runtime.Repository.ListCitiesByProvince(context.Background(), provinceCode)
+		if err != nil {
+			return err
+		}
+		cities = items
+		citySelect.SetOptions(cityOptionValues(cities))
+		return nil
+	}
+
+	loadBarangays := func(cityCode string) error {
+		items, err := runtime.Repository.ListBarangaysByCity(context.Background(), cityCode)
+		if err != nil {
+			return err
+		}
+		barangays = items
+		barangaySelect.SetOptions(barangayOptionValues(barangays))
+		return nil
+	}
+
+	applyPSGCSelection := func(regionCode, regionName, provinceCode, provinceName, cityCode, cityName, barangayCode, barangayName string) error {
+		if psgcUpdating {
+			return nil
+		}
+		psgcUpdating = true
+		defer func() {
+			psgcUpdating = false
+		}()
+
+		regionCode = strings.TrimSpace(regionCode)
+		regionName = strings.TrimSpace(regionName)
+		provinceCode = strings.TrimSpace(provinceCode)
+		provinceName = strings.TrimSpace(provinceName)
+		cityCode = strings.TrimSpace(cityCode)
+		cityName = strings.TrimSpace(cityName)
+		barangayCode = strings.TrimSpace(barangayCode)
+		barangayName = strings.TrimSpace(barangayName)
+
+		if regionCode == "" {
+			if regionName == "" {
+				regionSelect.SetSelected("")
+				regionCodeValue.SetText("Code: —")
+				regionNameValue.SetText("Name: —")
+				clearProvinceAndBelowSelections()
+				psgcState.RegionCode = ""
+				psgcState.RegionName = ""
+				return nil
+			}
+		}
+
+		if err := ensureRegionsLoaded(); err != nil {
+			return err
+		}
+
+		regionItem, ok := findRegionByCode(regionCode)
+		if !ok && regionName != "" {
+			regionItem, ok = findRegionByName(regionName)
+		}
+		if !ok {
+			regionSelect.SetSelected("")
+			regionCodeValue.SetText("Code: —")
+			regionNameValue.SetText("Name: —")
+			clearProvinceAndBelowSelections()
+			psgcState.RegionCode = ""
+			psgcState.RegionName = ""
+			return nil
+		}
+
+		psgcState.RegionCode = regionItem.RegionCode
+		psgcState.RegionName = regionItem.RegionName
+		regionSelect.SetSelected(psgcDisplay(regionItem.RegionCode, regionItem.RegionName))
+		regionCodeValue.SetText("Code: " + regionItem.RegionCode)
+		regionNameValue.SetText(regionItem.RegionName)
+
+		if err := loadProvinces(regionItem.RegionCode); err != nil {
+			return err
+		}
+		if len(provinces) == 0 {
+			clearProvinceAndBelowSelections()
+			return nil
+		}
+
+		if provinceCode == "" && provinceName == "" {
+			resetProvinceSelection()
+			return nil
+		}
+
+		provinceItem, provinceFound := findProvinceByCode(provinceCode)
+		if !provinceFound && provinceName != "" {
+			provinceItem, provinceFound = findProvinceByName(provinceName)
+		}
+		if !provinceFound {
+			resetProvinceSelection()
+			return nil
+		}
+
+		psgcState.ProvinceCode = provinceItem.ProvinceCode
+		psgcState.ProvinceName = provinceItem.ProvinceName
+		provinceSelect.SetSelected(psgcDisplay(provinceItem.ProvinceCode, provinceItem.ProvinceName))
+		provinceCodeValue.SetText("Code: " + provinceItem.ProvinceCode)
+		provinceNameValue.SetText(provinceItem.ProvinceName)
+
+		if err := loadCities(provinceItem.ProvinceCode); err != nil {
+			return err
+		}
+		if len(cities) == 0 {
+			resetCitySelection()
+			return nil
+		}
+
+		if cityCode == "" && cityName == "" {
+			resetCitySelection()
+			return nil
+		}
+
+		cityItem, cityFound := findCityByCode(cityCode)
+		if !cityFound && cityName != "" {
+			cityItem, cityFound = findCityByName(cityName)
+		}
+		if !cityFound {
+			resetCitySelection()
+			return nil
+		}
+
+		psgcState.CityCode = cityItem.CityCode
+		psgcState.CityName = cityItem.CityName
+		citySelect.SetSelected(psgcDisplay(cityItem.CityCode, cityItem.CityName))
+		cityCodeValue.SetText("Code: " + cityItem.CityCode)
+		cityNameValue.SetText(cityItem.CityName)
+
+		if err := loadBarangays(cityItem.CityCode); err != nil {
+			return err
+		}
+		if len(barangays) == 0 {
+			resetBarangaySelection()
+			return nil
+		}
+
+		if barangayCode == "" && barangayName == "" {
+			resetBarangaySelection()
+			return nil
+		}
+
+		barangayItem, barangayFound := findBarangayByCode(barangayCode)
+		if !barangayFound && barangayName != "" {
+			barangayItem, barangayFound = findBarangayByName(barangayName)
+		}
+		if !barangayFound {
+			resetBarangaySelection()
+			return nil
+		}
+
+		psgcState.BarangayCode = barangayItem.BarangayCode
+		psgcState.BarangayName = barangayItem.BarangayName
+		barangaySelect.SetSelected(psgcDisplay(barangayItem.BarangayCode, barangayItem.BarangayName))
+		barangayCodeValue.SetText("Code: " + barangayItem.BarangayCode)
+		barangayNameValue.SetText(barangayItem.BarangayName)
+		return nil
+	}
+
+	regionSelect.OnChanged = func(value string) {
+		if psgcUpdating {
+			return
+		}
+		if err := applyPSGCSelection(psgcCodeFromDisplay(value), psgcNameFromDisplay(value), "", "", "", "", "", ""); err != nil {
+			runtime.SetStatus("PSGC region load failed")
+			runtime.SetActivity(err.Error())
+		}
+	}
+
+	provinceSelect.OnChanged = func(value string) {
+		if psgcUpdating {
+			return
+		}
+		if err := applyPSGCSelection(psgcState.RegionCode, psgcState.RegionName, psgcCodeFromDisplay(value), psgcNameFromDisplay(value), "", "", "", ""); err != nil {
+			runtime.SetStatus("PSGC province load failed")
+			runtime.SetActivity(err.Error())
+		}
+	}
+
+	citySelect.OnChanged = func(value string) {
+		if psgcUpdating {
+			return
+		}
+		if err := applyPSGCSelection(psgcState.RegionCode, psgcState.RegionName, psgcState.ProvinceCode, psgcState.ProvinceName, psgcCodeFromDisplay(value), psgcNameFromDisplay(value), "", ""); err != nil {
+			runtime.SetStatus("PSGC city load failed")
+			runtime.SetActivity(err.Error())
+		}
+	}
+
+	barangaySelect.OnChanged = func(value string) {
+		if psgcUpdating {
+			return
+		}
+		code := psgcCodeFromDisplay(value)
+		name := psgcNameFromDisplay(value)
+		if code == "" {
+			if name == "" {
+				psgcState.BarangayCode = ""
+				psgcState.BarangayName = ""
+				barangayCodeValue.SetText("Code: —")
+				barangayNameValue.SetText("Name: —")
+				return
+			}
+		}
+		if code != "" {
+			if item, ok := findBarangayByCode(code); ok {
+				psgcState.BarangayCode = item.BarangayCode
+				psgcState.BarangayName = item.BarangayName
+				barangayCodeValue.SetText("Code: " + item.BarangayCode)
+				barangayNameValue.SetText(item.BarangayName)
+				return
+			}
+		}
+		if name != "" {
+			if item, ok := findBarangayByName(name); ok {
+				psgcState.BarangayCode = item.BarangayCode
+				psgcState.BarangayName = item.BarangayName
+				barangaySelect.SetSelected(psgcDisplay(item.BarangayCode, item.BarangayName))
+				barangayCodeValue.SetText("Code: " + item.BarangayCode)
+				barangayNameValue.SetText(item.BarangayName)
+			}
+			return
+		}
+	}
+
 	searchEntry := widget.NewEntry()
-	searchEntry.SetPlaceHolder("Search by generated ID, name, contact, or source reference")
+	searchEntry.SetPlaceHolder("Search by ID, name, contact, or source reference")
 	resultLabel := widget.NewLabel("Results: 0")
-	duplicateLabel := widget.NewLabel("Duplicate precheck: not run")
+	duplicateLabel := widget.NewLabel("Precheck ready")
 
 	generatedIDEntry := widget.NewEntry()
-	generatedIDEntry.SetPlaceHolder("Optional - leave blank for auto ID")
+	generatedIDEntry.SetPlaceHolder("Leave blank to auto-generate an ID")
 	lastNameEntry := widget.NewEntry()
 	firstNameEntry := widget.NewEntry()
 	middleNameEntry := widget.NewEntry()
 	extensionNameEntry := widget.NewEntry()
-	regionCodeEntry := widget.NewEntry()
-	regionNameEntry := widget.NewEntry()
-	provinceCodeEntry := widget.NewEntry()
-	provinceNameEntry := widget.NewEntry()
-	cityCodeEntry := widget.NewEntry()
-	cityNameEntry := widget.NewEntry()
-	barangayCodeEntry := widget.NewEntry()
-	barangayNameEntry := widget.NewEntry()
 	contactNoEntry := widget.NewEntry()
 	birthdateEntry := widget.NewEntry()
-	birthdateEntry.SetPlaceHolder("YYYY-MM-DD or blank")
+	birthdateEntry.SetPlaceHolder("YYYY-MM-DD")
 	sexEntry := widget.NewEntry()
-	sexEntry.SetPlaceHolder("M/F")
+	sexEntry.SetPlaceHolder("M or F")
 
 	clearForm := func() {
 		selectedUUID = ""
@@ -83,18 +581,14 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 		firstNameEntry.SetText("")
 		middleNameEntry.SetText("")
 		extensionNameEntry.SetText("")
-		regionCodeEntry.SetText("")
-		regionNameEntry.SetText("")
-		provinceCodeEntry.SetText("")
-		provinceNameEntry.SetText("")
-		cityCodeEntry.SetText("")
-		cityNameEntry.SetText("")
-		barangayCodeEntry.SetText("")
-		barangayNameEntry.SetText("")
+		if err := applyPSGCSelection("", "", "", "", "", "", "", ""); err != nil {
+			runtime.SetStatus("PSGC reset failed")
+			runtime.SetActivity(err.Error())
+		}
 		contactNoEntry.SetText("")
 		birthdateEntry.SetText("")
 		sexEntry.SetText("")
-		duplicateLabel.SetText("Duplicate precheck: not run")
+		duplicateLabel.SetText("Precheck ready")
 	}
 
 	setForm := func(item model.Beneficiary) {
@@ -104,14 +598,10 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 		firstNameEntry.SetText(item.FirstName)
 		middleNameEntry.SetText(derefString(item.MiddleName))
 		extensionNameEntry.SetText(derefString(item.ExtensionName))
-		regionCodeEntry.SetText(item.RegionCode)
-		regionNameEntry.SetText(item.RegionName)
-		provinceCodeEntry.SetText(item.ProvinceCode)
-		provinceNameEntry.SetText(item.ProvinceName)
-		cityCodeEntry.SetText(item.CityCode)
-		cityNameEntry.SetText(item.CityName)
-		barangayCodeEntry.SetText(item.BarangayCode)
-		barangayNameEntry.SetText(item.BarangayName)
+		if err := applyPSGCSelection(item.RegionCode, item.RegionName, item.ProvinceCode, item.ProvinceName, item.CityCode, item.CityName, item.BarangayCode, item.BarangayName); err != nil {
+			runtime.SetStatus("PSGC preload failed")
+			runtime.SetActivity(err.Error())
+		}
 		contactNoEntry.SetText(derefString(item.ContactNo))
 		birthdateEntry.SetText(derefString(item.BirthdateISO))
 		sexEntry.SetText(item.Sex)
@@ -123,7 +613,7 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 			return len(items)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			return widget.NewLabel("")
 		},
 		func(index widget.ListItemID, object fyne.CanvasObject) {
 			if index < 0 || index >= len(items) {
@@ -141,6 +631,12 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 		setForm(items[id])
 		runtime.SetActivity("Loaded beneficiary into form")
 	}
+
+	emptyStateLabel := widget.NewLabel("No beneficiaries loaded yet.\nUse New to create the first record or Import to bring one in.")
+	emptyStateLabel.Alignment = fyne.TextAlignCenter
+	emptyStateLabel.Wrapping = fyne.TextWrapWord
+	emptyStatePanel := container.NewCenter(container.NewVBox(emptyStateLabel))
+	beneficiaryListShell := container.NewStack(emptyStatePanel, container.NewVScroll(beneficiaryList))
 
 	refreshList := func(search string, preserveSelection string) {
 		search = strings.TrimSpace(search)
@@ -160,6 +656,16 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 				items = page.Items
 				resultLabel.SetText(fmt.Sprintf("Results: %d", page.Total))
 				beneficiaryList.Refresh()
+				if page.Total == 0 {
+					if strings.TrimSpace(search) == "" {
+						emptyStateLabel.SetText("No beneficiaries loaded yet.\nUse New to create the first record or Import to bring one in.")
+					} else {
+						emptyStateLabel.SetText("No matching beneficiaries found.\nTry a different search or clear the filter.")
+					}
+					emptyStatePanel.Show()
+				} else {
+					emptyStatePanel.Hide()
+				}
 				if preserveSelection != "" {
 					index := findBeneficiaryIndexByUUID(items, preserveSelection)
 					if index >= 0 {
@@ -179,14 +685,14 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 			FirstName:     firstNameEntry.Text,
 			MiddleName:    middleNameEntry.Text,
 			ExtensionName: extensionNameEntry.Text,
-			RegionCode:    regionCodeEntry.Text,
-			RegionName:    regionNameEntry.Text,
-			ProvinceCode:  provinceCodeEntry.Text,
-			ProvinceName:  provinceNameEntry.Text,
-			CityCode:      cityCodeEntry.Text,
-			CityName:      cityNameEntry.Text,
-			BarangayCode:  barangayCodeEntry.Text,
-			BarangayName:  barangayNameEntry.Text,
+			RegionCode:    psgcState.RegionCode,
+			RegionName:    psgcState.RegionName,
+			ProvinceCode:  psgcState.ProvinceCode,
+			ProvinceName:  psgcState.ProvinceName,
+			CityCode:      psgcState.CityCode,
+			CityName:      psgcState.CityName,
+			BarangayCode:  psgcState.BarangayCode,
+			BarangayName:  psgcState.BarangayName,
 			ContactNo:     contactNoEntry.Text,
 			BirthdateISO:  birthdateEntry.Text,
 			Sex:           sexEntry.Text,
@@ -350,6 +856,12 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 		refreshList(searchEntry.Text, strings.TrimSpace(selectedUUID))
 	})
 
+	precheckBtn.Importance = widget.MediumImportance
+	saveBtn.Importance = widget.HighImportance
+	newBtn.Importance = widget.LowImportance
+	softDeleteBtn.Importance = widget.LowImportance
+	reloadBtn.Importance = widget.LowImportance
+
 	leftPane := container.NewBorder(
 		container.NewVBox(
 			widget.NewLabel("Search"),
@@ -360,35 +872,61 @@ func buildBeneficiaryScreen(runtime *Runtime) fyne.CanvasObject {
 		nil,
 		nil,
 		nil,
-		container.NewVScroll(beneficiaryList),
+		beneficiaryListShell,
 	)
 
-	formGrid := container.NewAdaptiveGrid(2,
-		labeledField("Generated ID", generatedIDEntry),
-		labeledField("Sex", sexEntry),
-		labeledField("Last Name", lastNameEntry),
-		labeledField("First Name", firstNameEntry),
-		labeledField("Middle Name", middleNameEntry),
-		labeledField("Extension", extensionNameEntry),
-		labeledField("Birthdate ISO", birthdateEntry),
-		labeledField("Contact No", contactNoEntry),
-		labeledField("Region Code", regionCodeEntry),
-		labeledField("Region Name", regionNameEntry),
-		labeledField("Province Code", provinceCodeEntry),
-		labeledField("Province Name", provinceNameEntry),
-		labeledField("City Code", cityCodeEntry),
-		labeledField("City Name", cityNameEntry),
-		labeledField("Barangay Code", barangayCodeEntry),
-		labeledField("Barangay Name", barangayNameEntry),
+	identityCard := SectionCard(
+		"Identity",
+		"Core beneficiary profile",
+		container.NewGridWithColumns(2,
+			labeledField("Generated ID", generatedIDEntry),
+			labeledField("Sex", sexEntry),
+			labeledField("Last Name", lastNameEntry),
+			labeledField("First Name", firstNameEntry),
+			labeledField("Middle Name", middleNameEntry),
+			labeledField("Extension", extensionNameEntry),
+		),
+	)
+
+	locationCard := SectionCard(
+		"PSGC Location",
+		"Choose a region first; the remaining codes resolve automatically.",
+		container.NewVBox(
+			labeledField("Region", container.NewVBox(regionSelect, container.NewHBox(regionCodeValue, layout.NewSpacer(), regionNameValue))),
+			labeledField("Province", container.NewVBox(provinceSelect, container.NewHBox(provinceCodeValue, layout.NewSpacer(), provinceNameValue))),
+			labeledField("City", container.NewVBox(citySelect, container.NewHBox(cityCodeValue, layout.NewSpacer(), cityNameValue))),
+			labeledField("Barangay", container.NewVBox(barangaySelect, container.NewHBox(barangayCodeValue, layout.NewSpacer(), barangayNameValue))),
+		),
+	)
+
+	contactCard := SectionCard(
+		"Contact & Birthdate",
+		"Useful for duplicate matching and operator follow-up.",
+		container.NewGridWithColumns(2,
+			labeledField("Birthdate ISO", birthdateEntry),
+			labeledField("Contact No", contactNoEntry),
+		),
 	)
 
 	actionBar := container.NewHBox(newBtn, precheckBtn, saveBtn, softDeleteBtn, layout.NewSpacer(), reloadBtn)
+
+	if err := ensureRegionsLoaded(); err != nil {
+		runtime.SetStatus("PSGC region load failed")
+		runtime.SetActivity(err.Error())
+	}
+
 	rightPane := container.NewBorder(
-		container.NewVBox(widget.NewLabel("Beneficiary Encoding"), duplicateLabel),
+		container.NewVBox(
+			SectionHeader("Beneficiary Encoding", "PSGC-backed fields resolve the region chain and codes automatically."),
+			duplicateLabel,
+		),
 		actionBar,
 		nil,
 		nil,
-		container.NewVScroll(formGrid),
+		container.NewVScroll(container.NewVBox(
+			container.NewAdaptiveGrid(2, identityCard, locationCard),
+			contactCard,
+		)),
 	)
 
 	split := container.NewHSplit(leftPane, rightPane)

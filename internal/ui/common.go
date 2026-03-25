@@ -9,20 +9,15 @@ import (
 
 func psgcStatusSummary(report *psgc.Report) string {
 	if report == nil {
-		return "PSGC ingest: not attempted"
+		return "PSGC: not attempted"
 	}
 	if report.RowsRead == 0 {
-		return "PSGC ingest: no rows processed"
+		return "PSGC: no rows processed"
 	}
 	if report.Skipped {
-		return fmt.Sprintf("PSGC ingest: skipped, checksum already current (%s)", report.SourceChecksum)
+		return "PSGC: up to date"
 	}
-	return fmt.Sprintf(
-		"PSGC ingest: %d rows read, %d barangays loaded, checksum %s",
-		report.RowsRead,
-		report.BarangaysInserted,
-		report.SourceChecksum,
-	)
+	return fmt.Sprintf("PSGC: %d rows, %d barangays", report.RowsRead, report.BarangaysInserted)
 }
 
 func psgcChecksum(report *psgc.Report) string {

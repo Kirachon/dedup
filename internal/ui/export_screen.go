@@ -34,17 +34,17 @@ func buildExportScreen(runtime *Runtime) fyne.CanvasObject {
 
 	outputPath := widget.NewEntry()
 	outputPath.SetText(exportScreenDefaultOutputPath(runtime.DBPath, time.Now().UTC()))
-	outputPath.SetPlaceHolder(`D:\path\to\beneficiaries.csv`)
+	outputPath.SetPlaceHolder(`e.g. D:\Exports\beneficiaries.csv`)
 
 	operatorName := widget.NewEntry()
-	operatorName.SetPlaceHolder("operator name")
+	operatorName.SetPlaceHolder("Enter operator name")
 
 	includeUnresolved := widget.NewCheck("Include unresolved duplicates", nil)
 
 	resultView := widget.NewMultiLineEntry()
 	resultView.Disable()
 	resultView.Wrapping = fyne.TextWrapWord
-	resultView.SetPlaceHolder("export result")
+	resultView.SetPlaceHolder("Export results will appear here")
 
 	setResult := func(message string) {
 		fyne.Do(func() {
@@ -74,7 +74,7 @@ func buildExportScreen(runtime *Runtime) fyne.CanvasObject {
 			return len(exportLogs)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("export-log")
+			return widget.NewLabel("")
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label, ok := item.(*widget.Label)
@@ -186,27 +186,40 @@ func buildExportScreen(runtime *Runtime) fyne.CanvasObject {
 
 	loadAndRefreshLogs()
 
-	form := container.NewVBox(
-		widget.NewLabelWithStyle("Export Workflow", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewForm(
-			widget.NewFormItem("Output path", outputPath),
-			widget.NewFormItem("Operator", operatorName),
-			widget.NewFormItem("", includeUnresolved),
-		),
+	// ── Export Options Card ──────────────────────────────────────
+	exportBtn.Importance = widget.HighImportance
+
+	optionsForm := widget.NewForm(
+		widget.NewFormItem("Output path", outputPath),
+		widget.NewFormItem("Operator", operatorName),
+		widget.NewFormItem("", includeUnresolved),
+	)
+	optionsCard := Card(container.NewVBox(
+		SectionHeader("Export Options", "Configure and run a CSV export"),
+		widget.NewSeparator(),
+		optionsForm,
 		container.NewHBox(exportBtn, resetPathBtn, layout.NewSpacer(), refreshBtn),
-		widget.NewLabel("Result"),
 		resultView,
-	)
+	))
 
-	historyPane := container.NewBorder(
-		widget.NewLabelWithStyle("Recent Export History", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil,
-		nil,
-		nil,
+	// ── Export History Table ─────────────────────────────────────
+	historyCard := Card(container.NewBorder(
+		container.NewVBox(
+			SectionHeader("Export History", "Previous export operations"),
+			widget.NewSeparator(),
+		),
+		nil, nil, nil,
 		exportLogList,
-	)
+	))
 
-	return container.NewHSplit(form, historyPane)
+	// ── Page header ──────────────────────────────────────────────
+	pageHeader := SectionHeader("Export Data", "Export beneficiary records to CSV")
+
+	return container.NewVScroll(container.NewVBox(
+		pageHeader,
+		optionsCard,
+		historyCard,
+	))
 }
 
 func exportScreenDefaultOutputPath(dbPath string, now time.Time) string {

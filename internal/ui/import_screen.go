@@ -38,27 +38,27 @@ func buildImportScreen(runtime *Runtime) fyne.CanvasObject {
 	sourceType.SetSelected(string(model.ImportSourceCSV))
 
 	sourcePath := widget.NewEntry()
-	sourcePath.SetPlaceHolder(`D:\path\to\beneficiaries.csv or exchange.zip`)
+	sourcePath.SetPlaceHolder(`e.g. D:\Imports\beneficiaries.csv or exchange.zip`)
 
 	operatorName := widget.NewEntry()
-	operatorName.SetPlaceHolder("operator name")
+	operatorName.SetPlaceHolder("Enter operator name")
 
 	sourceReference := widget.NewEntry()
-	sourceReference.SetPlaceHolder("optional source reference")
+	sourceReference.SetPlaceHolder("Optional batch reference")
 
 	idempotencyKey := widget.NewEntry()
-	idempotencyKey.SetPlaceHolder("required for commit")
+	idempotencyKey.SetPlaceHolder("Leave blank to auto-generate")
 
 	previewToken := widget.NewMultiLineEntry()
-	previewToken.SetPlaceHolder("preview token output")
+	previewToken.SetPlaceHolder("Generated after preview")
 	previewToken.Wrapping = fyne.TextWrapWord
 
 	checkpointToken := widget.NewMultiLineEntry()
-	checkpointToken.SetPlaceHolder("checkpoint token for resume")
+	checkpointToken.SetPlaceHolder("Generated if resume is available")
 	checkpointToken.Wrapping = fyne.TextWrapWord
 
 	resultView := widget.NewMultiLineEntry()
-	resultView.SetPlaceHolder("import results and validation details")
+	resultView.SetPlaceHolder("Import results and validation details will appear here")
 	resultView.Wrapping = fyne.TextWrapWord
 	resultView.Disable()
 
@@ -90,7 +90,7 @@ func buildImportScreen(runtime *Runtime) fyne.CanvasObject {
 			return len(importLogs)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("import-log")
+			return widget.NewLabel("")
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			label, ok := item.(*widget.Label)
@@ -275,33 +275,48 @@ func buildImportScreen(runtime *Runtime) fyne.CanvasObject {
 	refreshBtn := widget.NewButton("Refresh history", loadAndRefreshLogs)
 	loadAndRefreshLogs()
 
-	form := container.NewVBox(
-		widget.NewLabelWithStyle("Import Workflow", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewForm(
-			widget.NewFormItem("Source type", sourceType),
-			widget.NewFormItem("Source path", sourcePath),
-			widget.NewFormItem("Operator", operatorName),
-			widget.NewFormItem("Source reference", sourceReference),
-			widget.NewFormItem("Idempotency key", idempotencyKey),
-		),
+	// ── Import Options Card ──────────────────────────────────────
+	previewBtn.Importance = widget.HighImportance
+
+	optionsForm := widget.NewForm(
+		widget.NewFormItem("Source type", sourceType),
+		widget.NewFormItem("Source path", sourcePath),
+		widget.NewFormItem("Operator", operatorName),
+		widget.NewFormItem("Source ref", sourceReference),
+		widget.NewFormItem("Idempotency key", idempotencyKey),
+	)
+
+	tokenSection := widget.NewForm(
+		widget.NewFormItem("Preview token", previewToken),
+		widget.NewFormItem("Checkpoint token", checkpointToken),
+	)
+
+	optionsCard := Card(container.NewVBox(
+		SectionHeader("Import Data", "Select CSV or ZIP exchange package to import"),
+		widget.NewSeparator(),
+		optionsForm,
 		container.NewHBox(previewBtn, commitBtn, resumeBtn, layout.NewSpacer(), refreshBtn),
-		widget.NewLabel("Preview token"),
-		previewToken,
-		widget.NewLabel("Checkpoint token"),
-		checkpointToken,
-		widget.NewLabel("Result"),
+		tokenSection,
 		resultView,
-	)
+	))
 
-	historyPane := container.NewBorder(
-		widget.NewLabelWithStyle("Recent Import History", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil,
-		nil,
-		nil,
+	// ── Import History Table ─────────────────────────────────────
+	historyCard := Card(container.NewBorder(
+		container.NewVBox(
+			SectionHeader("Import History", "Previous import operations"),
+			widget.NewSeparator(),
+		),
+		nil, nil, nil,
 		importLogList,
-	)
+	))
 
-	return container.NewHSplit(form, historyPane)
+	pageHeader := SectionHeader("Import Data", "Import beneficiary records from CSV or exchange package")
+
+	return container.NewVScroll(container.NewVBox(
+		pageHeader,
+		optionsCard,
+		historyCard,
+	))
 }
 
 func importScreenNormalizeSourceType(value string) model.ImportSource {

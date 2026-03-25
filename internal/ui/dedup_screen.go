@@ -36,7 +36,7 @@ func buildDedupScreen(runtime *Runtime) fyne.CanvasObject {
 
 	runsList := widget.NewList(
 		func() int { return len(runs) },
-		func() fyne.CanvasObject { return widget.NewLabel("template") },
+		func() fyne.CanvasObject { return widget.NewLabel("") },
 		func(index widget.ListItemID, object fyne.CanvasObject) {
 			if index < 0 || index >= len(runs) {
 				object.(*widget.Label).SetText("")
@@ -48,7 +48,7 @@ func buildDedupScreen(runtime *Runtime) fyne.CanvasObject {
 
 	matchesList := widget.NewList(
 		func() int { return len(matches) },
-		func() fyne.CanvasObject { return widget.NewLabel("template") },
+		func() fyne.CanvasObject { return widget.NewLabel("") },
 		func(index widget.ListItemID, object fyne.CanvasObject) {
 			if index < 0 || index >= len(matches) {
 				object.(*widget.Label).SetText("")
@@ -75,7 +75,7 @@ func buildDedupScreen(runtime *Runtime) fyne.CanvasObject {
 	resolvedByEntry := widget.NewEntry()
 	resolvedByEntry.SetText("reviewer")
 	notesEntry := widget.NewMultiLineEntry()
-	notesEntry.SetPlaceHolder("Optional decision notes")
+	notesEntry.SetPlaceHolder("Add decision notes if needed")
 	summaryLabel := widget.NewLabel("Run a dedup pass to generate match candidates")
 
 	refreshMatches := func(runID string) {
@@ -304,41 +304,68 @@ func buildDedupScreen(runtime *Runtime) fyne.CanvasObject {
 		}
 	})
 
+	// ── Dedup Controls Card ──────────────────────────────────────────
+	runDedupBtn.Importance = widget.HighImportance
+
 	controls := container.NewAdaptiveGrid(2,
 		labeledField("Threshold (0-100)", thresholdEntry),
 		labeledField("Initiated By", initiatedByEntry),
 	)
+
+	controlsCard := Card(container.NewVBox(
+		SectionHeader("Deduplication Review", "Run candidate matching and resolve duplicate records"),
+		widget.NewSeparator(),
+		controls,
+		includeDeletedCheck,
+		container.NewHBox(runDedupBtn),
+	))
+
+	// ── Decision Panel ────────────────────────────────────────────────
 	decisionPanel := container.NewAdaptiveGrid(2,
 		labeledField("Decision", decisionSelect),
 		labeledField("Resolved/Reset By", resolvedByEntry),
 	)
 
-	left := container.NewBorder(
-		container.NewVBox(widget.NewLabel("Runs"), controls, includeDeletedCheck, runDedupBtn),
-		nil,
-		nil,
-		nil,
-		container.NewVScroll(runsList),
-	)
+	applyDecisionBtn.Importance = widget.HighImportance
 
-	right := container.NewBorder(
-		container.NewVBox(widget.NewLabel("Matches"), summaryLabel),
+	decisionCard := Card(container.NewVBox(
+		summaryLabel,
+		decisionPanel,
+		labeledField("Notes", notesEntry),
+		container.NewHBox(applyDecisionBtn, resetDecisionBtn, layout.NewSpacer(), refreshBtn),
+	))
+
+	// ── Two-panel split: Runs/Matches lists ────────────────────────
+	left := Card(container.NewBorder(
 		container.NewVBox(
-			decisionPanel,
-			labeledField("Notes", notesEntry),
-			container.NewHBox(applyDecisionBtn, resetDecisionBtn, layout.NewSpacer(), refreshBtn),
+			container.NewHBox(
+				widget.NewLabelWithStyle("Dedup Runs", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			),
+			widget.NewSeparator(),
 		),
-		nil,
-		nil,
-		container.NewVScroll(matchesList),
-	)
+		nil, nil, nil,
+		container.NewVScroll(runsList),
+	))
 
-	split := container.NewHSplit(left, right)
-	split.Offset = 0.38
+	right := Card(container.NewBorder(
+		container.NewVBox(
+			widget.NewLabelWithStyle("Match Candidates", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewSeparator(),
+		),
+		decisionCard,
+		nil, nil,
+		container.NewVScroll(matchesList),
+	))
+
+	matchSplit := container.NewHSplit(left, right)
+	matchSplit.Offset = 0.38
 
 	refreshRuns()
 
-	return split
+	return container.NewVScroll(container.NewVBox(
+		controlsCard,
+		matchSplit,
+	))
 }
 
 func formatDedupRunItem(item model.DedupRun) string {
