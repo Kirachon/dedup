@@ -7,8 +7,9 @@ import (
 
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -25,8 +26,11 @@ func Launch(ctx context.Context, deps *Dependencies) error {
 	}
 
 	app := fyneapp.NewWithID(deps.Config.AppID)
+	app.Settings().SetTheme(&CivicLedgerTheme{})
+
 	window := app.NewWindow(deps.Config.WindowTitle)
 	window.Resize(fyne.NewSize(1360, 880))
+	window.SetMaster()
 
 	runtime := &Runtime{
 		Dependencies: deps,
@@ -43,66 +47,117 @@ func Launch(ctx context.Context, deps *Dependencies) error {
 
 func buildShell(runtime *Runtime) fyne.CanvasObject {
 	registry := snapshotScreenRegistry()
-	tabs := make([]*container.TabItem, 0, len(registry))
-	for _, entry := range registry {
-		build := entry.Build
-		if build == nil {
-			continue
-		}
-		tabs = append(tabs, container.NewTabItem(entry.Name, build(runtime)))
-	}
-	if len(tabs) == 0 {
-		tabs = append(tabs, container.NewTabItem("Dashboard", buildDashboard(runtime)))
+	if len(registry) == 0 {
+		return widget.NewLabel("No screens registered")
 	}
 
-	headerTitle := widget.NewLabelWithStyle(
-		runtime.Config.WindowTitle,
-		fyne.TextAlignLeading,
-		fyne.TextStyle{Bold: true},
-	)
-	dbPath := widget.NewLabel(fmt.Sprintf("DB: %s", runtime.DBPath))
-	psgcSummary := widget.NewLabel(psgcStatusSummary(runtime.PSGCReport))
+	// Build initial screen content
+	activeIdx := 0
+	contentArea := container.NewStack()
+	if registry[0].Build != nil {
+		contentArea.Objects = []fyne.CanvasObject{registry[0].Build(runtime)}
+	}
+
+	// Nav items from registry
+	items := make([]navItem, len(registry))
+	for i, e := range registry {
+		items[i] = navItem{
+			Order:  e.Order,
+			Label:  e.Name,
+			Icon:   iconForScreen(e.Name),
+			Screen: e.Build,
+		}
+	}
+
+	// Sidebar: rebuild nav buttons on every selection to update highlight
+	navContainer := container.NewVBox()
+	var rebuildNav func()
+
+	rebuildNav = func() {
+		navContainer.Objects = nil
+		for i := range items {
+			idx := i
+			item := items[i]
+			active := idx == activeIdx
+
+			icon := theme.DefaultTheme().Icon(item.Icon)
+			btn := buildNavButton(item.Label, icon, active, func() {
+				activeIdx = idx
+				rebuildNav()
+				if item.Screen != nil {
+					contentArea.Objects = []fyne.CanvasObject{item.Screen(runtime)}
+					contentArea.Refresh()
+				}
+				runtime.SetActivity(fmt.Sprintf("Navigated to %s", item.Label))
+			})
+			navContainer.Add(btn)
+		}
+		navContainer.Refresh()
+	}
+	rebuildNav()
+
+	// Status footer inside sidebar
 	statusLabel := widget.NewLabelWithData(runtime.StatusMessage)
-	activityLabel := widget.NewLabelWithData(runtime.Activity)
 
-	refreshTabs := container.NewAppTabs(tabs...)
-	refreshTabs.SetTabLocation(container.TabLocationTop)
-	refreshBtn := widget.NewButton("Refresh tabs", func() {
-		updated := snapshotScreenRegistry()
-		nextTabs := make([]*container.TabItem, 0, len(updated))
-		for _, entry := range updated {
-			if entry.Build == nil {
-				continue
-			}
-			nextTabs = append(nextTabs, container.NewTabItem(entry.Name, entry.Build(runtime)))
-		}
-		if len(nextTabs) == 0 {
-			nextTabs = append(nextTabs, container.NewTabItem("Dashboard", buildDashboard(runtime)))
-		}
-		refreshTabs.Items = nextTabs
-		refreshTabs.Refresh()
-		runtime.SetActivity("Tabs refreshed")
-	})
+	dbText := canvas.NewText(fmt.Sprintf("DB: %s", truncatePath(runtime.DBPath, 26)), ColorOnSurfaceVariant)
+	dbText.TextSize = 10
 
-	header := container.NewVBox(
-		headerTitle,
-		dbPath,
-		psgcSummary,
-		container.NewHBox(layout.NewSpacer(), refreshBtn),
+	psgcText := canvas.NewText(psgcStatusSummary(runtime.PSGCReport), ColorOnSurfaceVariant)
+	psgcText.TextSize = 10
+
+	sidebarFooter := container.NewVBox(
 		widget.NewSeparator(),
+		dbText,
+		psgcText,
 		statusLabel,
-		activityLabel,
 	)
 
-	return container.NewBorder(header, buildFooter(runtime), nil, nil, refreshTabs)
+	// Brand header
+	brandTitle := canvas.NewText(runtime.Config.WindowTitle, ColorPrimary)
+	brandTitle.TextSize = 14
+	brandTitle.TextStyle = fyne.TextStyle{Bold: true}
+
+	brandSub := canvas.NewText("LGU Administrative Portal", ColorOnSurfaceVariant)
+	brandSub.TextSize = 9
+
+	brandIconBg := canvas.NewRectangle(ColorPrimary)
+	brandIconBg.CornerRadius = 8
+	brandIconBg.SetMinSize(fyne.NewSize(36, 36))
+	brandIconLabel := canvas.NewText("⬡", ColorOnPrimary)
+	brandIconLabel.TextSize = 20
+	brandIconLabel.TextStyle = fyne.TextStyle{Bold: true}
+	brandIconBox := container.NewStack(brandIconBg, container.NewCenter(brandIconLabel))
+
+	brandTextBox := container.NewVBox(brandTitle, brandSub)
+	brandRow := container.NewPadded(container.NewHBox(brandIconBox, brandTextBox))
+
+	sidebarBg := canvas.NewRectangle(ColorSurfaceContainerLow)
+	sidebarContent := container.NewBorder(
+		container.NewVBox(brandRow, widget.NewSeparator()),
+		sidebarFooter,
+		nil, nil,
+		container.NewVScroll(navContainer),
+	)
+	sidebar := container.NewStack(sidebarBg, sidebarContent)
+
+	// Top bar
+	topBar := buildTopBar(runtime)
+
+	// Main area = top bar + content
+	mainBg := canvas.NewRectangle(ColorSurface)
+	mainContent := container.NewStack(
+		mainBg,
+		container.NewBorder(topBar, nil, nil, nil, container.NewPadded(contentArea)),
+	)
+
+	// Split sidebar (fixed 240px) + main content
+	split := container.NewHSplit(sidebar, mainContent)
+	split.SetOffset(0.18) // ~240px of a 1360 wide window
+
+	return split
 }
 
-func buildFooter(runtime *Runtime) fyne.CanvasObject {
-	return container.NewHBox(
-		widget.NewLabelWithStyle("Status:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabelWithData(runtime.StatusMessage),
-		layout.NewSpacer(),
-		widget.NewLabelWithStyle("Activity:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabelWithData(runtime.Activity),
-	)
+func buildFooter(_ *Runtime) fyne.CanvasObject {
+	// Footer is now embedded in the sidebar — kept for compatibility only.
+	return widget.NewLabel("")
 }
