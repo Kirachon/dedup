@@ -360,6 +360,12 @@ func importScreenDescribeImportResult(result *importer.ImportResult) string {
 	fmt.Fprintf(&b, "Import ID: %s\n", result.ImportID)
 	fmt.Fprintf(&b, "Status: %s\n", result.Status)
 	fmt.Fprintf(&b, "Rows read=%d inserted=%d skipped=%d failed=%d\n", result.RowsRead, result.RowsInserted, result.RowsSkipped, result.RowsFailed)
+	if result.RowsInserted == 0 && result.RowsRead > 0 {
+		b.WriteString("No beneficiaries were inserted. Check the normalization ledger and duplicate checks.\n")
+	}
+	if result.RowsSkipped > 0 {
+		b.WriteString("Some skipped rows were unresolved or duplicate-protected.\n")
+	}
 	if result.CheckpointToken != nil && strings.TrimSpace(*result.CheckpointToken) != "" {
 		b.WriteString("Checkpoint token generated for resume\n")
 	}

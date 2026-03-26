@@ -53,6 +53,47 @@ func TestNormalizeChainFuzzyMatchAboveCutoffAutoApplies(t *testing.T) {
 	}
 }
 
+func TestNormalizeChainRegionAliasAutoApplies(t *testing.T) {
+	t.Parallel()
+
+	catalog, err := NewCatalog(
+		[]model.PSGCRegion{
+			{RegionCode: "02", RegionName: "Region II"},
+		},
+		[]model.PSGCProvince{
+			{ProvinceCode: "0201", RegionCode: "02", ProvinceName: "Cagayan"},
+		},
+		[]model.PSGCCity{
+			{CityCode: "020101", RegionCode: "02", ProvinceCode: stringPtr("0201"), CityName: "Tuguegarao City"},
+		},
+		[]model.PSGCBarangay{
+			{BarangayCode: "020101001", RegionCode: "02", ProvinceCode: stringPtr("0201"), CityCode: "020101", BarangayName: "Caggay"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("build alias test catalog: %v", err)
+	}
+
+	normalizer, err := New(catalog)
+	if err != nil {
+		t.Fatalf("create alias test normalizer: %v", err)
+	}
+
+	result := normalizer.NormalizeChain(model.LocationChainRaw{
+		Region:   "ii",
+		Province: "CAGAYAN",
+		City:     "TUGUEGARAO CITY",
+		Barangay: "CAGGAY",
+	})
+
+	if !result.AutoApply || result.NeedsReview {
+		t.Fatalf("expected roman-numeral region alias to auto-apply, got %+v", result)
+	}
+	if result.Resolved.RegionName != "Region II" {
+		t.Fatalf("expected region alias to canonicalize to Region II, got %q", result.Resolved.RegionName)
+	}
+}
+
 func TestNormalizeChainAmbiguousTieNeedsReview(t *testing.T) {
 	t.Parallel()
 

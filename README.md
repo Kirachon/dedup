@@ -51,10 +51,14 @@ The importer accepts common messy location text in the public template
 canonical PSGC code/name values before saving records.
 
 - Exact PSGC matches are applied immediately.
-- Fuzzy matching is only auto-applied when confidence is high and the full
-  region-province-city-barangay chain resolves consistently.
-- Ambiguous or low-confidence rows are not auto-fixed; they are flagged for
-  review so partial chain drift is never written.
+- Fuzzy matching is auto-applied when confidence is high enough and the full
+  region-province-city-barangay chain resolves consistently. Borderline rows
+  can still be imported when the normalizer resolves a complete PSGC chain;
+  they are recorded in the normalization ledger so location correction stays
+  visible later. The importer also recognizes common region aliases like `II`,
+  `NCR`, `CAR`, and `BARMM`.
+- Truly vague or low-confidence rows remain flagged for review so partial
+  chain drift is never written.
 
 ## Beginner Setup
 

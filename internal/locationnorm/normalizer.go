@@ -16,7 +16,7 @@ const (
 	defaultMaxCandidates       = 10
 
 	// NormalizationVersion tags behavior so previews/checkpoints remain deterministic.
-	NormalizationVersion = "v1-cleanlist-parity"
+	NormalizationVersion = "v1-cleanlist-parity-region-aliases"
 )
 
 type chainRecord struct {
@@ -38,6 +38,7 @@ type Catalog struct {
 	barangays      []model.PSGCBarangay
 	chains         []chainRecord
 	regionByCode   map[string]model.PSGCRegion
+	regionByAlias  map[string]string
 	provinceByCode map[string]model.PSGCProvince
 	cityByCode     map[string]model.PSGCCity
 	barangayByCode map[string]model.PSGCBarangay
@@ -60,6 +61,7 @@ func NewCatalog(
 		cities:         append([]model.PSGCCity(nil), cities...),
 		barangays:      append([]model.PSGCBarangay(nil), barangays...),
 		regionByCode:   make(map[string]model.PSGCRegion, len(regions)),
+		regionByAlias:  make(map[string]string, len(regions)*4),
 		provinceByCode: make(map[string]model.PSGCProvince, len(provinces)),
 		cityByCode:     make(map[string]model.PSGCCity, len(cities)),
 		barangayByCode: make(map[string]model.PSGCBarangay, len(barangays)),
@@ -72,6 +74,7 @@ func NewCatalog(
 			continue
 		}
 		catalog.regionByCode[code] = item
+		catalog.addRegionAliases(code, item.RegionName)
 	}
 	for _, item := range provinces {
 		code := strings.TrimSpace(item.ProvinceCode)
@@ -133,6 +136,40 @@ func NewCatalog(
 	}
 
 	return catalog, nil
+}
+
+func (c *Catalog) addRegionAliases(regionCode, regionName string) {
+	if c == nil {
+		return
+	}
+	canonicalName := strings.TrimSpace(regionName)
+	if canonicalName == "" {
+		return
+	}
+	for _, alias := range regionAliasForms(regionCode, canonicalName) {
+		key := normalizeLookup(alias)
+		if key == "" {
+			continue
+		}
+		if _, exists := c.regionByAlias[key]; exists {
+			continue
+		}
+		c.regionByAlias[key] = canonicalName
+	}
+}
+
+func (c *Catalog) canonicalizeRegionInput(value string) string {
+	if c == nil {
+		return sanitizeText(value)
+	}
+	key := normalizeLookup(value)
+	if key == "" {
+		return sanitizeText(value)
+	}
+	if canonical, ok := c.regionByAlias[key]; ok {
+		return canonical
+	}
+	return sanitizeText(value)
 }
 
 // LocationNormalizer resolves raw location chains to canonical PSGC fields.
@@ -198,8 +235,14 @@ func New(catalog *Catalog, opts ...Option) (*LocationNormalizer, error) {
 
 // NormalizeChain resolves one full location chain and enforces atomic apply decisions.
 func (n *LocationNormalizer) NormalizeChain(raw model.LocationChainRaw) model.LocationNormalizationResult {
+	cleanedRaw := sanitizeRawChain(raw)
+	canonicalRaw := cleanedRaw
+	if n != nil && n.catalog != nil {
+		canonicalRaw.Region = n.catalog.canonicalizeRegionInput(cleanedRaw.Region)
+	}
+
 	result := model.LocationNormalizationResult{
-		Raw:                  sanitizeRawChain(raw),
+		Raw:                  cleanedRaw,
 		MatchSource:          model.LocationMatchSourceNone,
 		Status:               model.LocationNormalizationStatusReviewNeeded,
 		NeedsReview:          true,
@@ -212,7 +255,7 @@ func (n *LocationNormalizer) NormalizeChain(raw model.LocationChainRaw) model.Lo
 		return result
 	}
 
-	working, confidence, source, reason := n.resolveChain(result.Raw)
+	working, confidence, source, reason := n.resolveChain(canonicalRaw)
 	if reason != "" {
 		result.Reason = reason
 	}
@@ -231,7 +274,7 @@ func (n *LocationNormalizer) NormalizeChain(raw model.LocationChainRaw) model.Lo
 		BarangayName: working.barangayName,
 	}
 
-	if n.chainReady(working) && n.validateChain(working) {
+	if reason == "" && n.chainReady(working) && n.validateChain(working) {
 		result.Status = model.LocationNormalizationStatusAutoApplied
 		result.NeedsReview = false
 		result.AutoApply = true
@@ -308,10 +351,10 @@ func (n *LocationNormalizer) resolveChain(raw model.LocationChainRaw) (chainReco
 
 	best := scored[0]
 	if len(scored) > 1 && math.Abs(scored[0].score-scored[1].score) < n.tieDelta {
-		return chainRecord{}, best.score, model.LocationMatchSourceFuzzy, "ambiguous location candidates"
+		return best.chain, best.score, model.LocationMatchSourceFuzzy, "ambiguous location candidates"
 	}
 	if best.score < n.confidenceThreshold {
-		return chainRecord{}, best.score, model.LocationMatchSourceFuzzy, "confidence below threshold"
+		return best.chain, best.score, model.LocationMatchSourceFuzzy, "confidence below threshold"
 	}
 
 	source := model.LocationMatchSourceFuzzy
@@ -493,6 +536,63 @@ func sanitizeRawChain(raw model.LocationChainRaw) model.LocationChainRaw {
 		City:     sanitizeText(raw.City),
 		Barangay: sanitizeText(raw.Barangay),
 	}
+}
+
+func regionAliasForms(regionCode, regionName string) []string {
+	aliases := []string{strings.TrimSpace(regionCode), strings.TrimSpace(regionName)}
+	normalized := normalizeLookup(regionName)
+	if normalized != "" {
+		aliases = append(aliases, normalized)
+	}
+
+	tokens := strings.Fields(normalized)
+	if len(tokens) > 1 && tokens[0] == "region" {
+		aliasTokens := make([]string, 0, 2)
+		for idx := 1; idx < len(tokens); idx++ {
+			token := tokens[idx]
+			if token == "region" {
+				break
+			}
+			aliasTokens = append(aliasTokens, token)
+			if len(aliasTokens) == 2 {
+				break
+			}
+		}
+		if len(aliasTokens) > 0 {
+			joined := strings.Join(aliasTokens, " ")
+			aliases = append(aliases, joined, strings.ReplaceAll(joined, " ", ""), "region "+joined)
+		}
+	}
+
+	switch normalized {
+	case "national capital region":
+		aliases = append(aliases, "ncr")
+	case "cordillera administrative region":
+		aliases = append(aliases, "car")
+	case "autonomous region in muslim mindanao":
+		aliases = append(aliases, "armm")
+	case "bangsamoro autonomous region in muslim mindanao":
+		aliases = append(aliases, "barmm")
+	}
+
+	deduped := make([]string, 0, len(aliases))
+	seen := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" {
+			continue
+		}
+		key := normalizeLookup(alias)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, alias)
+	}
+	return deduped
 }
 
 func sanitizeText(value string) string {

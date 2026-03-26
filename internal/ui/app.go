@@ -34,6 +34,7 @@ func Launch(ctx context.Context, deps *Dependencies) error {
 
 	runtime := &Runtime{
 		Dependencies: deps,
+		App:          app,
 		Window:       window,
 	}
 	runtime.SetStatus("Ready")

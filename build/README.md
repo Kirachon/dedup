@@ -31,6 +31,9 @@ Installer and signing steps are intentionally deferred to a later wave.
 
 - The packaged app uses PSGC-backed import-time normalization for
   `region/province/city_municipality/barangay` in the public CSV template.
+- Borderline rows that resolve to a complete PSGC chain can still be imported;
+  they are written to the normalization ledger so operators can review and
+  correct location details later.
 - The app also includes a backfill workflow for previously stored records, with
   dry-run and apply modes.
 - The Rust `cleanlist_rust` project is used only as a parity oracle for

@@ -42,6 +42,10 @@ const (
 	packageBeneficiariesName  = "beneficiaries.csv"
 	packageChecksumsFileName  = "checksums.txt"
 	packageExportMetaFileName = "export_meta.json"
+
+	// Rows that are not auto-applied can still be imported when the normalizer
+	// resolves a complete PSGC chain with enough confidence to keep the batch moving.
+	importReviewAcceptanceThreshold = 0.90
 )
 
 // Importer orchestrates preview, commit, and resume for offline beneficiary imports.
@@ -58,23 +62,23 @@ type Importer struct {
 
 // ImportToken stores the stable source details used for preview/commit/resume.
 type ImportToken struct {
-	Stage           string             `json:"stage"`
-	SourceType      model.ImportSource `json:"source_type"`
-	SourcePath      string             `json:"source_path"`
-	SourceHash      string             `json:"source_hash"`
-	SourceReference string             `json:"source_reference"`
-	FileName        string             `json:"file_name"`
-	OperatorName    string             `json:"operator_name"`
-	CreatedAtUTC    string             `json:"created_at_utc"`
-	ImportID        string             `json:"import_id,omitempty"`
-	IdempotencyKey  string             `json:"idempotency_key,omitempty"`
-	NextRow         int                `json:"next_row,omitempty"`
-	RowsRead        int                `json:"rows_read,omitempty"`
-	RowsInserted    int                `json:"rows_inserted,omitempty"`
-	RowsSkipped     int                `json:"rows_skipped,omitempty"`
-	RowsFailed      int                `json:"rows_failed,omitempty"`
-	NormalizationVersion string        `json:"normalization_version,omitempty"`
-	NormalizationHash    string        `json:"normalization_hash,omitempty"`
+	Stage                string             `json:"stage"`
+	SourceType           model.ImportSource `json:"source_type"`
+	SourcePath           string             `json:"source_path"`
+	SourceHash           string             `json:"source_hash"`
+	SourceReference      string             `json:"source_reference"`
+	FileName             string             `json:"file_name"`
+	OperatorName         string             `json:"operator_name"`
+	CreatedAtUTC         string             `json:"created_at_utc"`
+	ImportID             string             `json:"import_id,omitempty"`
+	IdempotencyKey       string             `json:"idempotency_key,omitempty"`
+	NextRow              int                `json:"next_row,omitempty"`
+	RowsRead             int                `json:"rows_read,omitempty"`
+	RowsInserted         int                `json:"rows_inserted,omitempty"`
+	RowsSkipped          int                `json:"rows_skipped,omitempty"`
+	RowsFailed           int                `json:"rows_failed,omitempty"`
+	NormalizationVersion string             `json:"normalization_version,omitempty"`
+	NormalizationHash    string             `json:"normalization_hash,omitempty"`
 }
 
 type sourceDocument struct {
@@ -1062,7 +1066,13 @@ func (i *Importer) buildPublicDraftFromRecord(ctx context.Context, doc sourceDoc
 		City:     cityValue,
 		Barangay: barangayValue,
 	})
-	if !normalization.AutoApply || normalization.NeedsReview {
+	if normalization.Resolved.RegionCode == "" ||
+		normalization.Resolved.ProvinceCode == "" ||
+		normalization.Resolved.CityCode == "" ||
+		normalization.Resolved.BarangayCode == "" {
+		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, &normalizationReviewRequiredError{result: normalization}
+	}
+	if normalization.NeedsReview && normalization.Confidence < importReviewAcceptanceThreshold {
 		return service.BeneficiaryDraft{}, rowSourceReference, "", &normalization, &normalizationReviewRequiredError{result: normalization}
 	}
 	birthMonth, err := parseNullableInt64Field(birthMonthText, "month_mm")

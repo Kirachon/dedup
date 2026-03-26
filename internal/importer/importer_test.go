@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"dedup/internal/db"
+	"dedup/internal/locationnorm"
 	"dedup/internal/model"
 	"dedup/internal/repository"
 	"dedup/internal/service"
@@ -195,7 +196,7 @@ func TestImporterPreviewAndCommitExchangePackage(t *testing.T) {
 	}
 }
 
-func TestImporterQuarantinesReviewNeededLocationRows(t *testing.T) {
+func TestImporterSkipsLowConfidenceReviewNeededLocationRows(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -206,7 +207,7 @@ func TestImporterQuarantinesReviewNeededLocationRows(t *testing.T) {
 	seedImporterPSGC(t, handle.DB)
 	csvPath := writeBeneficiaryCSVFixture(t, []beneficiaryCSVRow{
 		{
-			ID: "",
+			ID:       "",
 			LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "",
 			Region: "Region Unknown", Province: "Province Unknown", CityMunicipality: "City Unknown", Barangay: "Barangay Unknown",
 			ContactNo: "09170000001", MonthMM: "01", DayDD: "02", YearYYYY: "1980", Sex: "F",
@@ -271,6 +272,95 @@ func TestImporterQuarantinesReviewNeededLocationRows(t *testing.T) {
 	}
 }
 
+func TestImporterImportsHighConfidenceReviewNeededLocationRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixed := time.Date(2026, time.March, 25, 19, 15, 0, 0, time.UTC)
+	imp, repo, _, handle, cleanup := newImporterTestFixture(t, WithClock(func() time.Time { return fixed }))
+	defer cleanup()
+
+	seedImporterPSGC(t, handle.DB)
+	catalog, err := locationnorm.NewCatalog(
+		[]model.PSGCRegion{
+			{RegionCode: "01", RegionName: "Region One"},
+		},
+		[]model.PSGCProvince{
+			{ProvinceCode: "0101", RegionCode: "01", ProvinceName: "Province One"},
+		},
+		[]model.PSGCCity{
+			{CityCode: "010101", RegionCode: "01", ProvinceCode: stringPtr("0101"), CityName: "City One"},
+		},
+		[]model.PSGCBarangay{
+			{BarangayCode: "010101001", RegionCode: "01", ProvinceCode: stringPtr("0101"), CityCode: "010101", BarangayName: "Barangay One"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("build review-needed test catalog: %v", err)
+	}
+
+	normalizer, err := locationnorm.New(catalog, locationnorm.WithConfidenceThreshold(0.999))
+	if err != nil {
+		t.Fatalf("create review-needed test normalizer: %v", err)
+	}
+	imp.normalizer = normalizer
+
+	csvPath := writeBeneficiaryCSVFixture(t, []beneficiaryCSVRow{
+		{
+			ID:       "",
+			LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "",
+			Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay Onee",
+			ContactNo: "09170000001", MonthMM: "01", DayDD: "02", YearYYYY: "1980", Sex: "F",
+		},
+	})
+
+	preview, err := imp.Preview(ctx, Source{
+		Type:            model.ImportSourceCSV,
+		Path:            csvPath,
+		OperatorName:    "operator-review-accept",
+		SourceReference: "csv-review-accept-fixture",
+	})
+	if err != nil {
+		t.Fatalf("preview csv with high-confidence review-needed row: %v", err)
+	}
+	if preview.RowCountTotal != 1 || preview.RowCountValid != 1 || preview.RowCountInvalid != 0 {
+		t.Fatalf("unexpected preview counts for high-confidence review-needed row: %+v", preview)
+	}
+	if len(preview.SampleErrors) != 0 {
+		t.Fatalf("expected no preview errors for accepted review-needed row, got %+v", preview.SampleErrors)
+	}
+
+	result, err := imp.Commit(ctx, preview.PreviewToken, "idem-csv-review-accept-1")
+	if err != nil {
+		t.Fatalf("commit csv with high-confidence review-needed row: %v", err)
+	}
+	if result.Status != importStatusSucceeded {
+		t.Fatalf("expected succeeded status, got %s", result.Status)
+	}
+	if result.RowsRead != 1 || result.RowsInserted != 1 || result.RowsSkipped != 0 || result.RowsFailed != 0 {
+		t.Fatalf("unexpected commit counts for accepted review-needed row: %+v", result)
+	}
+
+	page, err := repo.ListBeneficiaries(ctx, repository.BeneficiaryListQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list beneficiaries: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("expected one inserted beneficiary for accepted review-needed import, got %d", len(page.Items))
+	}
+
+	runs, err := repo.ListLocationNormalizationRuns(ctx, repository.LocationNormalizationRunListQuery{ImportID: result.ImportID, Limit: 5})
+	if err != nil {
+		t.Fatalf("list normalization runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one normalization run for accepted review-needed import, got %d", len(runs))
+	}
+	if runs[0].ReviewRows != 1 || runs[0].AutoAppliedRows != 0 {
+		t.Fatalf("unexpected normalization run counters for accepted review-needed row: %+v", runs[0])
+	}
+}
+
 func TestImporterResumeRejectsNormalizationMetadataMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -282,13 +372,13 @@ func TestImporterResumeRejectsNormalizationMetadataMismatch(t *testing.T) {
 	seedImporterPSGC(t, handle.DB)
 	csvPath := writeBeneficiaryCSVFixture(t, []beneficiaryCSVRow{
 		{
-			ID: "",
+			ID:       "",
 			LastName: "Reyes", FirstName: "Ana", MiddleName: "S", ExtensionName: "",
 			Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One",
 			ContactNo: "09170000001", MonthMM: "01", DayDD: "02", YearYYYY: "1980", Sex: "F",
 		},
 		{
-			ID: "",
+			ID:       "",
 			LastName: "Santos", FirstName: "Ben", MiddleName: "T", ExtensionName: "",
 			Region: "Region One", Province: "Province One", CityMunicipality: "City One", Barangay: "Barangay One",
 			ContactNo: "09170000002", MonthMM: "03", DayDD: "04", YearYYYY: "1979", Sex: "M",

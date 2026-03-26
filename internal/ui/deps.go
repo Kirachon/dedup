@@ -107,6 +107,7 @@ func NewDependencies(
 // Runtime adds the live window handle to the shared dependencies.
 type Runtime struct {
 	*Dependencies
+	App    fyne.App
 	Window fyne.Window
 }
 
